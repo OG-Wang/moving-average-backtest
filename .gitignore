@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境（Windows 专属二进制，不可跨平台，勿提交）
+.venv/
+venv/
+
+# 密钥（含真实 API key，切勿提交）
+src/.env
+.env
+
+# 数据缓存（体积大、可随时重新拉取）
+data_cache/
+
+# 生成的报告
+report_*.html
+
+# macOS 本地自建的一键启动脚本（各人本地生成，见 README）
+*.command
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code 本地设置（机器相关，勿提交；如需共享配置另建 .claude/settings.json）
+.claude/settings.local.json
