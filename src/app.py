@@ -128,6 +128,10 @@ iframe{width:100%;height:1500px;border:1px solid var(--line);border-radius:8px;b
         <input name="ma_sell" type="number" min="1" value="20" />
         <span class="hint">收盘价跌破该均线时卖出，如 20；与买入相同即单均线</span>
       </div>
+      <div class="field col2">
+        <label class="row-check"><input type="checkbox" name="require_ma_order" /> 顺势过滤：仅当买入均线高于卖出均线时才买入</label>
+        <span class="hint">默认关闭。仅在「买入均线周期 &lt; 卖出均线周期」时有意义，可避免买入次日即被卖出的「一日游」</span>
+      </div>
       <div class="field">
         <label>时间框架</label>
         <select name="timeframe">
@@ -263,6 +267,7 @@ def run():
             ma=ma_buy,
             ma_buy=ma_buy,
             ma_sell=ma_sell,
+            require_ma_order=bool(f.get("require_ma_order")),
             timeframe=(f.get("timeframe") or "1d").strip(),
             start=(f.get("start") or "2021-01-01").strip(),
             end=((f.get("end") or "").strip() or None),
@@ -280,6 +285,8 @@ def run():
         n = len([s for s in symbol.split(",") if s.strip()])
         tf = args.timeframe if args.timeframe not in ("1d", "日线") else "日线"
         ma_desc = f"MA{ma_buy}" if ma_buy == ma_sell else f"买MA{ma_buy}/卖MA{ma_sell}"
+        if args.require_ma_order and ma_buy < ma_sell:
+            ma_desc += "（顺势）"
         summary = f"✓ 完成：{n} 个标的 · {tf} · {ma_desc} · 成交={args.exec}" + (f" · 寻优 {optimize}" if optimize else "")
         return jsonify(ok=True, url=f"/report/{rid}", summary=summary)
     except Exception as e:  # noqa: BLE001

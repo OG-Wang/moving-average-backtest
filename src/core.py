@@ -68,20 +68,27 @@ def _ma_pair(args) -> tuple[int, int]:
     return int(buy), int(sell)
 
 
-def _ma_label(buy: int, sell: int) -> str:
-    """统一的均线描述文案：同周期显示 MAN，不同周期显示 买MAx/卖MAy。"""
-    return f"MA{buy}" if buy == sell else f"买MA{buy}/卖MA{sell}"
+def _ma_label(buy: int, sell: int, require_order: bool = False) -> str:
+    """统一的均线描述文案：同周期显示 MAN，不同周期显示 买MAx/卖MAy；顺势过滤生效时加后缀。
+
+    顺势过滤仅在 买入周期 < 卖出周期 时生效（与 strategy 一致），其余视为无害不启用。
+    """
+    base = f"MA{buy}" if buy == sell else f"买MA{buy}/卖MA{sell}"
+    if require_order and buy < sell:
+        base += "（顺势）"
+    return base
 
 
 def run_one(symbol: str, args) -> dict:
     """对单个标的跑回测，返回供报告使用的 panel。"""
     timeframe = getattr(args, "timeframe", "1d") or "1d"
     buy, sell = _ma_pair(args)
+    require_order = bool(getattr(args, "require_ma_order", False))
     longest = max(buy, sell)
     warmup = max(2 * longest, longest + 5)
     df = fetch_bars(symbol, timeframe, start=args.start, end=args.end,
                     warmup=warmup, refresh=args.refresh)
-    strat = MovingAverageStrategy(buy, sell)
+    strat = MovingAverageStrategy(buy, sell, require_ma_order=require_order)
     sig = strat.generate_signals(df)
     eng = BacktestEngine(commission=args.commission, slippage=args.slippage,
                          exec_mode=args.exec)
@@ -91,7 +98,7 @@ def run_one(symbol: str, args) -> dict:
                         rf=args.rf, periods_per_year=ppy)
     name = index_name(symbol)
     tf_tag = "" if timeframe in ("1d", "日线") else f" {timeframe}"
-    print(f"  {name}({symbol}){tf_tag} {_ma_label(buy, sell)}: 总收益 {m['total_return']*100:.1f}%  "
+    print(f"  {name}({symbol}){tf_tag} {_ma_label(buy, sell, require_order)}: 总收益 {m['total_return']*100:.1f}%  "
           f"年化 {m['annual_return']*100:.1f}%  回撤 {m['max_drawdown']*100:.1f}%  "
           f"夏普 {m['sharpe']:.2f}  交易 {m['n_trades']} 笔")
     return {"symbol": symbol, "label": f"{name}({symbol})", "res": res,
@@ -112,7 +119,8 @@ def execute(args) -> SimpleNamespace:
     timeframe = getattr(args, "timeframe", "1d") or "1d"
     tf_label = "日线" if timeframe in ("1d", "日线") else timeframe
     buy, sell = _ma_pair(args)
-    ma_desc = _ma_label(buy, sell)
+    require_order = bool(getattr(args, "require_ma_order", False))
+    ma_desc = _ma_label(buy, sell, require_order)
     print(f"开始回测：{', '.join(symbols)} | {tf_label} | {ma_desc} | {args.start} ~ {args.end or '最新'} | "
           f"成交={args.exec} | 佣金={args.commission*1e4:.1f}‱")
 
@@ -134,6 +142,7 @@ def execute(args) -> SimpleNamespace:
     meta = {
         "exec_mode": args.exec, "commission": args.commission, "slippage": args.slippage,
         "ma_desc": ma_desc,
+        "require_ma_order": require_order and buy < sell,
         "start": panels[0]["res"].meta["start"], "end": panels[0]["res"].meta["end"],
     }
     tf_tag = "" if timeframe in ("1d", "日线") else f"{timeframe} · "
