@@ -1,7 +1,8 @@
-"""数据层：获取 A 股指数 / 美股个股日线数据。
+"""数据层：获取 A 股指数 / 全球指数 / 美股个股日线数据。
 
 支持两类标的，按代码自动判别（见 _is_us）：
   - A 股指数：纯数字代码（如 000688）或带 sh/sz 前缀。
+  - 全球/港股指数：常用别名（如 日经225/N225、恒生指数/HSI、恒生科技/HSTECH）。
   - 美股个股/ETF：含字母的代码（如 SOXL、TQQQ、AAPL）。
 
 数据源策略（按此环境实测可靠性排序）：
@@ -10,9 +11,15 @@
     2) 腾讯财经  ak.stock_zh_index_daily_tx     —— 备用源
   美股个股：
     1) 新浪财经  ak.stock_us_daily              —— 返回全历史 OHLCV，列与 A 股源一致
+  全球指数：
+    1) 新浪财经  ak.index_global_hist_sina      —— 主源
+    2) 东方财富  ak.index_global_hist_em        —— 备用源
+  港股指数：
+    1) 新浪财经  ak.stock_hk_index_daily_sina   —— 主源
+    2) 东方财富  ak.stock_hk_index_daily_em     —— 备用源
 
 缓存与覆盖逻辑（每个指数只保存一个 CSV，内容始终是"最早～最新"的最全数据）：
-  - 这两个数据源都【没有日期参数】，单次请求即返回该指数成立日至今的全部历史，
+  - 日线数据源通常【没有日期参数】，单次请求即返回该标的可得的全部历史，
     无法"只请求缺失的一段"。因此一次性拉全量既是唯一可行方式，也最省事。
   - 请求时先看本地缓存：若缓存已覆盖请求区间（起点足够早、且数据足够新）→ 直接用本地，不联网。
   - 若缓存缺更早的数据，或不够新 → 联网拉全量，与旧缓存【按日期取并集合并】后回写，
@@ -45,6 +52,33 @@ CACHE_DIR = os.path.join(
 # 标准列：date(index, datetime) / open / high / low / close / volume
 _STD_COLS = ["open", "high", "low", "close", "volume"]
 
+_GLOBAL_SINA_NAME = {
+    "日经225": "日经225指数",
+}
+
+_SPECIAL_DAILY_ROUTES = {
+    # 全球指数
+    "日经225": {"kind": "global", "fetch_id": "日经225", "cache_key": "global_N225", "label": "日经225"},
+    "n225": {"kind": "global", "fetch_id": "日经225", "cache_key": "global_N225", "label": "日经225"},
+    "nikkei225": {"kind": "global", "fetch_id": "日经225", "cache_key": "global_N225", "label": "日经225"},
+    "nikkei": {"kind": "global", "fetch_id": "日经225", "cache_key": "global_N225", "label": "日经225"},
+    # 港股指数
+    "恒生指数": {"kind": "hk", "fetch_id": "HSI", "cache_key": "hk_HSI", "label": "恒生指数"},
+    "hsi": {"kind": "hk", "fetch_id": "HSI", "cache_key": "hk_HSI", "label": "恒生指数"},
+    "恒指": {"kind": "hk", "fetch_id": "HSI", "cache_key": "hk_HSI", "label": "恒生指数"},
+    "恒生科技": {"kind": "hk", "fetch_id": "HSTECH", "cache_key": "hk_HSTECH", "label": "恒生科技"},
+    "恒生科技指数": {"kind": "hk", "fetch_id": "HSTECH", "cache_key": "hk_HSTECH", "label": "恒生科技"},
+    "hstech": {"kind": "hk", "fetch_id": "HSTECH", "cache_key": "hk_HSTECH", "label": "恒生科技"},
+}
+
+
+def _alias_key(code: str) -> str:
+    return str(code).strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
+def _special_daily_route(code: str) -> dict | None:
+    return _SPECIAL_DAILY_ROUTES.get(_alias_key(code))
+
 
 def _is_us(code: str) -> bool:
     """判断标的是否为美股个股/ETF。
@@ -53,6 +87,8 @@ def _is_us(code: str) -> bool:
     """
     code = str(code).strip()
     if not code:
+        return False
+    if _special_daily_route(code):
         return False
     low = code.lower()
     if low.startswith(("sh", "sz", "bj")):
@@ -69,6 +105,9 @@ def to_sina_symbol(code: str) -> str:
       若已带前缀（sh/sz/bj 开头）则原样返回。
     """
     code = str(code).strip()
+    route = _special_daily_route(code)
+    if route:
+        return route["fetch_id"]
     if _is_us(code):
         return code.upper()
     code = code.lower()
@@ -79,6 +118,58 @@ def to_sina_symbol(code: str) -> str:
     if code.startswith(("399", "395")):
         return "sz" + code
     return "sh" + code
+
+
+def daily_symbol_label(code: str) -> str | None:
+    """返回特殊日线标的的显示名称；非特殊标的返回 None。"""
+    route = _special_daily_route(code)
+    return route["label"] if route else None
+
+
+def _pick(df: pd.DataFrame, candidates: list[str], required: bool = True) -> str | None:
+    """按候选列名挑出数据源实际返回的列，兼容中英文和大小写。"""
+    lower = {str(c).strip().lower(): c for c in df.columns}
+    for c in candidates:
+        if c in df.columns:
+            return c
+        key = str(c).strip().lower()
+        if key in lower:
+            return lower[key]
+    if required:
+        raise KeyError(f"列未找到，候选={candidates}，实际={list(df.columns)}")
+    return None
+
+
+def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """把中英文列名的指数数据统一为标准 OHLCV；缺少 OHLC 时用 close 兜底。"""
+    df = df.copy()
+    date_col = _pick(df, ["date", "日期", "datetime"])
+    close_col = _pick(df, ["close", "收盘", "收盘价", "最新价", "latest"])
+    open_col = _pick(df, ["open", "开盘", "开盘价", "今开"], required=False)
+    high_col = _pick(df, ["high", "最高", "最高价"], required=False)
+    low_col = _pick(df, ["low", "最低", "最低价"], required=False)
+    volume_col = _pick(df, ["volume", "成交量", "amount", "成交额"], required=False)
+
+    out = pd.DataFrame()
+    out["date"] = pd.to_datetime(df[date_col])
+    out["close"] = pd.to_numeric(df[close_col], errors="coerce")
+    out["open"] = pd.to_numeric(df[open_col], errors="coerce") if open_col else out["close"]
+    out["high"] = pd.to_numeric(df[high_col], errors="coerce") if high_col else out["close"]
+    out["low"] = pd.to_numeric(df[low_col], errors="coerce") if low_col else out["close"]
+    out["volume"] = pd.to_numeric(df[volume_col], errors="coerce") if volume_col else pd.NA
+    out = out[["date"] + _STD_COLS].dropna(subset=["close"])
+    out = out.sort_values("date").drop_duplicates(subset="date").set_index("date")
+    return out
+
+
+def _daily_route(symbol: str) -> dict:
+    route = _special_daily_route(symbol)
+    if route:
+        return route
+    sina_symbol = to_sina_symbol(symbol)
+    if _is_us(symbol):
+        return {"kind": "us", "fetch_id": sina_symbol, "cache_key": f"us_{sina_symbol}", "label": sina_symbol}
+    return {"kind": "a_index", "fetch_id": sina_symbol, "cache_key": sina_symbol, "label": sina_symbol}
 
 
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
@@ -132,6 +223,69 @@ def _fetch_raw(sina_symbol: str, retries: int = 3) -> pd.DataFrame:
     raise ConnectionError(f"所有数据源均获取失败：{type(last_err).__name__}: {last_err}")
 
 
+def _fetch_global_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
+    """获取海外指数日线。新浪全球指数为主，东方财富全球指数兜底。"""
+    import akshare as ak
+
+    sources = []
+    sina_name = _GLOBAL_SINA_NAME.get(fetch_id)
+    if sina_name:
+        sources.append(("sina_global", lambda: ak.index_global_hist_sina(symbol=sina_name)))
+    sources.append(("em_global", lambda: ak.index_global_hist_em(symbol=fetch_id)))
+
+    last_err: Exception | None = None
+    for name, call in sources:
+        for attempt in range(1, retries + 1):
+            try:
+                df = call()
+                if df is None or len(df) == 0:
+                    raise ValueError("返回空数据")
+                return _normalize_ohlcv(df)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                wait = 1.5 * attempt
+                print(f"  [{name}] 第 {attempt}/{retries} 次获取失败：{type(e).__name__}: {str(e)[:80]}；{wait:.1f}s 后重试")
+                time.sleep(wait)
+        print(f"  [{name}] 源不可用，尝试下一个源 ...")
+    raise ConnectionError(f"所有全球指数数据源均获取失败：{type(last_err).__name__}: {last_err}")
+
+
+def _fetch_hk_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
+    """获取港股指数日线。新浪港股指数为主，东方财富港股指数兜底。"""
+    import akshare as ak
+
+    sources = [
+        ("sina_hk", lambda: ak.stock_hk_index_daily_sina(symbol=fetch_id)),
+        ("em_hk", lambda: ak.stock_hk_index_daily_em(symbol=fetch_id)),
+    ]
+    last_err: Exception | None = None
+    for name, call in sources:
+        for attempt in range(1, retries + 1):
+            try:
+                df = call()
+                if df is None or len(df) == 0:
+                    raise ValueError("返回空数据")
+                return _normalize_ohlcv(df)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                wait = 1.5 * attempt
+                print(f"  [{name}] 第 {attempt}/{retries} 次获取失败：{type(e).__name__}: {str(e)[:80]}；{wait:.1f}s 后重试")
+                time.sleep(wait)
+        print(f"  [{name}] 源不可用，尝试下一个源 ...")
+    raise ConnectionError(f"所有港股指数数据源均获取失败：{type(last_err).__name__}: {last_err}")
+
+
+def _fetch_daily_raw(route: dict) -> pd.DataFrame:
+    kind = route["kind"]
+    if kind in ("a_index", "us"):
+        return _fetch_raw(route["fetch_id"])
+    if kind == "global":
+        return _fetch_global_raw(route["fetch_id"])
+    if kind == "hk":
+        return _fetch_hk_raw(route["fetch_id"])
+    raise ValueError(f"未知日线数据路由：{route}")
+
+
 def _read_cache(path: str) -> pd.DataFrame | None:
     """读取本地缓存 CSV，返回标准化（datetime 索引、标准列、升序）的 DataFrame；无缓存或损坏返回 None。"""
     if not os.path.exists(path):
@@ -159,7 +313,7 @@ def fetch_index_daily(
 
     参数
     ----
-    symbol  : 标的代码。A 股指数如 '000688'（科创50，可带/不带 sh/sz 前缀）；美股如 'SOXL'。
+    symbol  : 标的代码。A 股指数如 '000688'；全球/港股指数如 'N225'/'HSTECH'/'HSI'；美股如 'SOXL'。
     start   : 回测起始日期 'YYYY-MM-DD'，None 表示不裁剪左端。
     end     : 回测结束日期 'YYYY-MM-DD'，None 表示取到最新交易日。
     warmup  : 均线预热——在 start 之前额外保留的交易日数，使 start 当日均线已成形。
@@ -170,10 +324,11 @@ def fetch_index_daily(
     DataFrame，datetime 索引，列 = [open, high, low, close, volume]，按日期升序。
     含 warmup 段（位于 start 之前），绩效统计时应只从 start 起算。
     """
-    sina_symbol = to_sina_symbol(symbol)
+    route = _daily_route(symbol)
+    fetch_id = route["fetch_id"]
     os.makedirs(CACHE_DIR, exist_ok=True)
-    # 美股缓存加 us_ 前缀，避免与 A 股代码空间冲突（如 sh000688_daily.csv vs us_SOXL_daily.csv）
-    cache_key = f"us_{sina_symbol}" if _is_us(symbol) else sina_symbol
+    # 非 A 股缓存加来源前缀，避免与 A 股代码空间冲突（如 sh000688_daily.csv vs us_SOXL_daily.csv）
+    cache_key = route["cache_key"]
     cache_path = os.path.join(CACHE_DIR, f"{cache_key}_daily.csv")
 
     cached = _read_cache(cache_path)  # 没有缓存时返回 None
@@ -200,8 +355,8 @@ def fetch_index_daily(
 
     # ---- 第 2 步：按需联网拉全量，并与旧缓存合并取并集（保留最早～最新） ----
     if need_fetch:
-        print(f"获取数据：{symbol} -> {sina_symbol}（{reason}；数据源单次返回全历史）")
-        fresh = _fetch_raw(sina_symbol)
+        print(f"获取数据：{symbol} -> {fetch_id}（{reason}；日线数据源）")
+        fresh = _fetch_daily_raw(route)
         if cached is not None:
             # 合并去重：同一日期以最新拉取的为准
             df = pd.concat([cached, fresh])
@@ -328,7 +483,7 @@ def fetch_intraday(
     Twelve Data 单次最多返回 outputsize 根，定期运行可让本地历史随时间增长、突破单次窗口。
     """
     if not _is_us(symbol):
-        raise ValueError(f"日内回测目前仅支持美股标的（如 SOXL）；A 股代码 {symbol} 暂不支持日内。")
+        raise ValueError(f"日内回测目前仅支持美股标的（如 SOXL）；非美股标的 {symbol} 暂不支持日内。")
     if timeframe not in TIMEFRAME_TO_TD:
         raise ValueError(f"不支持的时间框架 {timeframe}；可选：{list(TIMEFRAME_TO_TD)}")
 
@@ -390,7 +545,7 @@ def fetch_bars(
     warmup: int = 0,
     refresh: bool = False,
 ) -> pd.DataFrame:
-    """统一取数入口：日线走 fetch_index_daily（A股/美股皆可），日内走 fetch_intraday（仅美股）。"""
+    """统一取数入口：日线走 fetch_index_daily（A股/全球/港股/美股皆可），日内走 fetch_intraday（仅美股）。"""
     if timeframe in (None, "1d", "日线", "day", "daily"):
         return fetch_index_daily(symbol, start=start, end=end, warmup=warmup, refresh=refresh)
     return fetch_intraday(symbol, timeframe, start=start, end=end, warmup=warmup, refresh=refresh)

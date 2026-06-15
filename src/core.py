@@ -16,7 +16,7 @@ try:
 except Exception:
     pass
 
-from data import fetch_bars, _is_us
+from data import fetch_bars, _is_us, daily_symbol_label
 from strategy import MovingAverageStrategy
 from engine import BacktestEngine
 from metrics import compute_metrics
@@ -34,6 +34,9 @@ INDEX_NAMES = {
 
 def index_name(code: str) -> str:
     # 美股直接显示大写代码（如 SOXL）；A 股指数查表，未命中回退代码本身
+    special = daily_symbol_label(code)
+    if special:
+        return special
     if _is_us(code):
         return str(code).upper()
     c = str(code).lower()
@@ -41,7 +44,13 @@ def index_name(code: str) -> str:
         if c.startswith(prefix):
             c = c[len(prefix):]
             break
-    return INDEX_NAMES.get(c, code)
+    extra = {
+        "n225": "日经225",
+        "nikkei225": "日经225",
+        "hsi": "恒生指数",
+        "hstech": "恒生科技",
+    }
+    return extra.get(c, INDEX_NAMES.get(c, code))
 
 
 def _periods_per_year(timeframe: str, idx) -> float:

@@ -48,7 +48,8 @@ def _store_report(rid: str, html: str) -> None:
 PRESETS = [
     ("000688", "科创50"), ("000300", "沪深300"), ("000905", "中证500"),
     ("000001", "上证指数"), ("399006", "创业板指"), ("000852", "中证1000"),
-    ("000016", "上证50"), ("899050", "北证50"), ("SOXL", "美股"), ("TQQQ", "美股"),
+    ("000016", "上证50"), ("899050", "北证50"), ("N225", "日经225"),
+    ("HSTECH", "恒生科技"), ("HSI", "恒生指数"), ("SOXL", "美股"), ("TQQQ", "美股"),
 ]
 
 PAGE = """<!DOCTYPE html>
@@ -94,13 +95,14 @@ input:focus,select:focus{outline:none;border-color:var(--accent);}
 #result{display:none;}
 #result .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
 #result a{color:var(--accent);text-decoration:none;font-size:13px;}
-iframe{width:100%;height:1500px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+/* 报告内嵌框：高度由 JS 按内容自适应，去边框/底色，使其与页面平铺为一体、不产生内部滚动条 */
+iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
 @media(max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}.field.col2{grid-column:span 2}}
 </style></head>
 <body><div class="wrap">
 <header class="top">
-  <h1>均线择时回测 · A股指数 / 美股</h1>
-  <div class="meta">收盘价上穿买入均线买入 · 跌破卖出均线卖出（可设不同周期）· 本地图形界面（数据源：新浪财经）</div>
+  <h1>均线择时回测 · A股指数 / 全球指数 / 美股</h1>
+  <div class="meta">收盘价上穿买入均线买入 · 跌破卖出均线卖出（可设不同周期）· 本地图形界面（数据源：新浪财经 / 东方财富）</div>
 </header>
 
 <div class="card">
@@ -116,7 +118,7 @@ iframe{width:100%;height:1500px;border:1px solid var(--line);border-radius:8px;b
       <div class="field col2">
         <label>标的代码（多个用英文逗号分隔则对比）</label>
         <input name="symbol" id="symbol" value="000688" />
-        <span class="hint">A股指数如 000688 科创50；美股如 SOXL、TQQQ；可混合对比 000688,SOXL</span>
+        <span class="hint">A股指数如 000688；全球/港股指数如 N225、HSTECH、HSI；美股如 SOXL、TQQQ；可混合对比 000688,N225,HSTECH</span>
       </div>
       <div class="field">
         <label>买入均线（上穿买入）</label>
@@ -141,7 +143,7 @@ iframe{width:100%;height:1500px;border:1px solid var(--line);border-radius:8px;b
           <option value="1h">1 小时（仅美股）</option>
           <option value="30m">30 分钟（仅美股）</option>
         </select>
-        <span class="hint">日内仅美股 · 4h≈7年/2h/1h历史递减 · 数据源 Twelve Data</span>
+        <span class="hint">日线支持 A股/全球/港股/美股；日内仅美股 · 数据源 Twelve Data</span>
       </div>
       <div class="field">
         <label>成交时点</label>
@@ -210,6 +212,32 @@ function setSymbol(code){
 function addCompare(){ compareMode=!compareMode;
   event.target.textContent=compareMode?'✓ 对比模式(点指数追加)':'+ 加入对比'; }
 
+// 将内嵌报告的高度同步为其真实内容高度，从而去掉框内滚动条、让报告随主页面一起滚动。
+// 报告与本页同源（皆由本地 Flask 提供），可安全读取 contentDocument 测高。
+let _frameResizeObs=null;
+function fitFrame(){
+  const f=document.getElementById('frame');
+  const doc=f.contentDocument||f.contentWindow.document;
+  if(!doc||!doc.body) return;
+  // scrollHeight 取 body 与 documentElement 的较大者，覆盖不同报告结构
+  const h=Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+  if(h>0) f.style.height=h+'px';
+}
+function bindFrameAutoResize(){
+  const f=document.getElementById('frame');
+  fitFrame();
+  // Plotly 图表渲染/重排会改变高度，用 ResizeObserver 持续跟随；并加几次延迟兜底
+  try{
+    if(_frameResizeObs) _frameResizeObs.disconnect();
+    const doc=f.contentDocument||f.contentWindow.document;
+    if(window.ResizeObserver && doc && doc.body){
+      _frameResizeObs=new ResizeObserver(()=>fitFrame());
+      _frameResizeObs.observe(doc.body);
+    }
+  }catch(e){/* 跨源等异常时静默，退回固定高度 */}
+  [200,600,1200,2500].forEach(t=>setTimeout(fitFrame,t));
+}
+
 document.getElementById('form').addEventListener('submit',async(e)=>{
   e.preventDefault();
   const btn=document.getElementById('runBtn'), st=document.getElementById('status');
@@ -224,13 +252,17 @@ document.getElementById('form').addEventListener('submit',async(e)=>{
     const res=document.getElementById('result');
     res.style.display='block';
     const url=j.url+'?t='+Date.now();
-    document.getElementById('frame').src=url;
+    const frame=document.getElementById('frame');
+    frame.onload=bindFrameAutoResize;   // 报告加载完成后按内容高度自适应
+    frame.src=url;
     document.getElementById('openLink').href=url;
     res.scrollIntoView({behavior:'smooth'});
   }catch(err){
     st.className='status err'; st.textContent='✗ '+err.message;
   }finally{ btn.disabled=false; }
 });
+// 主窗口尺寸变化时重新测高（Plotly 自适应宽度后高度可能变化）
+window.addEventListener('resize',()=>{ if(document.getElementById('result').style.display!=='none') fitFrame(); });
 </script>
 </body></html>
 """

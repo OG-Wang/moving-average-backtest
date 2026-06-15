@@ -380,7 +380,7 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
         + (f'，滑点 {meta.get("slippage",0)*1e4:.1f}‱' if meta.get("slippage") else "") + '。<br>'
         '说明：当日收盘价成交模式含轻微未来函数（以当日收盘价决策并成交），属日线回测常规简化；'
         '如需更贴近实盘可选「次日开盘」成交。指数不可直接交易，本结果仅为策略验证，不构成投资建议。<br>'
-        f'数据源：新浪财经（akshare）。生成区间：{meta.get("start")} ~ {meta.get("end")}。'
+        f'数据源：akshare（新浪财经/东方财富等）。生成区间：{meta.get("start")} ~ {meta.get("end")}。'
         '</div>'
     )
     footer = '<div class="copyright">Copyright © Rick</div>'
