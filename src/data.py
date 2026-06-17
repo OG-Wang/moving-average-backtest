@@ -52,6 +52,9 @@ CACHE_DIR = os.path.join(
 # 标准列：date(index, datetime) / open / high / low / close / volume
 _STD_COLS = ["open", "high", "low", "close", "volume"]
 
+# 数据新鲜度阈值：最新 bar 距今超过此自然日数 → 视为陈旧/错源，切换下一个源
+FRESH_MAX_DAYS = 12
+
 _GLOBAL_SINA_NAME = {
     "日经225": "日经225指数",
 }
@@ -190,10 +193,35 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _guard_fresh(df: pd.DataFrame, source_name: str = "") -> pd.DataFrame:
+    """拒绝陈旧数据（如新浪对个别指数返回多年前旧序列），让调用方切到下一个源。
+
+    参数
+    ----
+    df : 已标准化的 DataFrame（datetime 索引）
+    source_name : 数据源名称，用于错误提示
+
+    返回
+    ----
+    原 DataFrame（若数据新鲜）
+
+    异常
+    ----
+    ValueError : 数据为空或陈旧
+    """
+    if df is None or df.empty:
+        raise ValueError(f"[{source_name}] 空数据")
+    gap = (dt.date.today() - df.index[-1].date()).days
+    if gap > FRESH_MAX_DAYS:
+        raise ValueError(f"[{source_name}] 数据陈旧（末 {df.index[-1].date()}，距今 {gap} 天）")
+    return df
+
+
 def _fetch_raw(sina_symbol: str, retries: int = 3) -> pd.DataFrame:
     """从主源/备用源拉取全历史，带重试与指数退避。返回标准化 DataFrame。
 
     美股走 ak.stock_us_daily；A 股指数走新浪 / 腾讯指数源。两类源均无日期参数、单次返回全历史。
+    自动跳过陈旧数据源（如新浪对某些行业指数返回多年前旧序列）。
     """
     import akshare as ak
 
@@ -213,7 +241,8 @@ def _fetch_raw(sina_symbol: str, retries: int = 3) -> pd.DataFrame:
                 df = call()
                 if df is None or len(df) == 0:
                     raise ValueError("返回空数据")
-                return _normalize(df)
+                normalized = _normalize(df)
+                return _guard_fresh(normalized, name)  # 新鲜度校验
             except Exception as e:  # noqa: BLE001  —— 网络/解析异常统一重试
                 last_err = e
                 wait = 1.5 * attempt
@@ -224,7 +253,7 @@ def _fetch_raw(sina_symbol: str, retries: int = 3) -> pd.DataFrame:
 
 
 def _fetch_global_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
-    """获取海外指数日线。新浪全球指数为主，东方财富全球指数兜底。"""
+    """获取海外指数日线。新浪全球指数为主，东方财富全球指数兜底。自动跳过陈旧数据源。"""
     import akshare as ak
 
     sources = []
@@ -240,7 +269,8 @@ def _fetch_global_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
                 df = call()
                 if df is None or len(df) == 0:
                     raise ValueError("返回空数据")
-                return _normalize_ohlcv(df)
+                normalized = _normalize_ohlcv(df)
+                return _guard_fresh(normalized, name)  # 新鲜度校验
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 wait = 1.5 * attempt
@@ -251,7 +281,7 @@ def _fetch_global_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
 
 
 def _fetch_hk_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
-    """获取港股指数日线。新浪港股指数为主，东方财富港股指数兜底。"""
+    """获取港股指数日线。新浪港股指数为主，东方财富港股指数兜底。自动跳过陈旧数据源。"""
     import akshare as ak
 
     sources = [
@@ -265,7 +295,8 @@ def _fetch_hk_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
                 df = call()
                 if df is None or len(df) == 0:
                     raise ValueError("返回空数据")
-                return _normalize_ohlcv(df)
+                normalized = _normalize_ohlcv(df)
+                return _guard_fresh(normalized, name)  # 新鲜度校验
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 wait = 1.5 * attempt
