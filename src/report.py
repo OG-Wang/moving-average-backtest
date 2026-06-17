@@ -371,10 +371,14 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
 
     order_note = ('买入额外要求「买入均线 > 卖出均线」（顺势过滤），避免买入次日即触发卖出。'
                   if meta.get("require_ma_order") else '')
+    _buf = meta.get("sell_buffer") or 0
+    buffer_note = (f'卖出设有缓冲：仅当收盘价跌破卖出均线超过 {_buf*100:g}% 才卖出，'
+                   '其下方小幅波动继续持有。' if _buf > 0 else '')
     note = (
         '<div class="note">'
         f'策略：{meta.get("ma_desc","MA")} —— 收盘价上穿买入均线当日买入、跌破卖出均线当日卖出（满仓/空仓择时）。'
         f'{order_note}'
+        f'{buffer_note}'
         f'成交模式：{"次日开盘价" if meta.get("exec_mode")=="next_open" else "当日收盘价"}成交；'
         f'单边佣金 {meta.get("commission",0)*1e4:.1f}‱'
         + (f'，滑点 {meta.get("slippage",0)*1e4:.1f}‱' if meta.get("slippage") else "") + '。<br>'

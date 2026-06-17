@@ -39,17 +39,25 @@ class MovingAverageStrategy(Strategy):
       买入时额外要求"买入均线 > 卖出均线"。该条件主要用于 买入周期 < 卖出周期 的情形——
       避免价格刚上穿较快的买入均线、却仍在较慢的卖出均线下方，从而买入次日即触发卖出的"一日游"。
       当买入均线天然在卖出均线上方（如买入周期 >= 卖出周期的多数时段）时，此条件几乎不改变结果。
+
+    sell_buffer（默认 0，即不启用）：
+      卖出缓冲比例。持仓时仅当收盘价跌破卖出均线「超过该比例」才卖出，即触发阈值为
+      卖出均线 ×(1 - sell_buffer)。例如 sell_buffer=0.02 时，跌破卖出均线但仍在其下方 2%
+      以内的小幅波动会继续持有，直到跌破超过 2% 才卖出，用于过滤贴线的假突破抖动。
     """
 
     def __init__(self, buy_window: int = 20, sell_window: int | None = None,
-                 require_ma_order: bool = False):
+                 require_ma_order: bool = False, sell_buffer: float = 0.0):
         if sell_window is None:
             sell_window = buy_window
         if buy_window < 1 or sell_window < 1:
             raise ValueError("均线周期必须 >= 1")
+        if sell_buffer < 0:
+            raise ValueError("卖出缓冲比例必须 >= 0")
         self.buy_window = buy_window
         self.sell_window = sell_window
         self.require_ma_order = require_ma_order
+        self.sell_buffer = float(sell_buffer)
         # window 保留为买入均线周期，兼容仅关心单一周期的旧调用方
         self.window = buy_window
         # 顺势过滤仅在「买入周期 < 卖出周期」时有意义；其余情形视为无害不启用
@@ -58,6 +66,8 @@ class MovingAverageStrategy(Strategy):
                      else f"MA买{buy_window}/卖{sell_window}")
         if self._order_active:
             self.name += "(顺势)"
+        if self.sell_buffer > 0:
+            self.name += f"(缓冲{self.sell_buffer*100:g}%)"
 
     def generate_signals(self, df: pd.DataFrame) -> pd.Series:
         close = df["close"]
@@ -70,6 +80,8 @@ class MovingAverageStrategy(Strategy):
         n = len(c)
         out = np.zeros(n, dtype=int)
         require_order = self._order_active
+        # 卖出触发阈值 = 卖出均线 ×(1 - buffer)；buffer=0 时退化为原先的"跌破即卖"
+        sell_mult = 1.0 - self.sell_buffer
 
         held = False
         for i in range(n):
@@ -77,7 +89,7 @@ class MovingAverageStrategy(Strategy):
                 # 任一均线未成形：保持空仓
                 held = False
             elif held:
-                if c[i] < ms[i]:
+                if c[i] < ms[i] * sell_mult:
                     held = False
             else:
                 can_buy = c[i] > mb[i]

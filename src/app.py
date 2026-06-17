@@ -1,6 +1,6 @@
 """本地图形界面：用浏览器填参数运行回测。
 
-启动后访问 http://127.0.0.1:5000 ，在网页表单里设置指数、均线、区间等参数，
+启动后访问 http://127.0.0.1:5050 ，在网页表单里设置指数、均线、区间等参数，
 点击"运行回测"即可在页面内查看报告。底层复用 core.execute()，与命令行同一套逻辑。
 
 启动：  .venv\\Scripts\\python src\\app.py
@@ -133,6 +133,11 @@ iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
       <div class="field col2">
         <label class="row-check"><input type="checkbox" name="require_ma_order" /> 顺势过滤：仅当买入均线高于卖出均线时才买入</label>
         <span class="hint">默认关闭。仅在「买入均线周期 &lt; 卖出均线周期」时有意义，可避免买入次日即被卖出的「一日游」</span>
+      </div>
+      <div class="field">
+        <label>卖出缓冲（%）</label>
+        <input name="sell_buffer" type="number" min="0" step="0.1" placeholder="留空=不启用" />
+        <span class="hint">跌破卖出均线但在此范围内仍持有，如填 2 表示跌破超过 2% 才卖出；留空=跌破即卖</span>
       </div>
       <div class="field">
         <label>时间框架</label>
@@ -292,6 +297,13 @@ def run():
         if ma_buy < 1 or ma_sell < 1:
             return jsonify(ok=False, error="均线周期必须 ≥ 1")
         optimize = (f.get("optimize") or "").strip() or None
+        # 卖出缓冲：前端以百分数填写（如 2 表示 2%），留空=不启用；内部转为小数 0.02
+        buf_raw = (f.get("sell_buffer") or "").strip()
+        sell_buffer = 0.0
+        if buf_raw:
+            sell_buffer = _to_float(buf_raw, 0.0) / 100.0
+            if sell_buffer < 0:
+                return jsonify(ok=False, error="卖出缓冲比例必须 ≥ 0")
         rid = str(int(time.time() * 1000))
 
         args = SimpleNamespace(
@@ -300,6 +312,7 @@ def run():
             ma_buy=ma_buy,
             ma_sell=ma_sell,
             require_ma_order=bool(f.get("require_ma_order")),
+            sell_buffer=sell_buffer,
             timeframe=(f.get("timeframe") or "1d").strip(),
             start=(f.get("start") or "2021-01-01").strip(),
             end=((f.get("end") or "").strip() or None),
@@ -319,6 +332,8 @@ def run():
         ma_desc = f"MA{ma_buy}" if ma_buy == ma_sell else f"买MA{ma_buy}/卖MA{ma_sell}"
         if args.require_ma_order and ma_buy < ma_sell:
             ma_desc += "（顺势）"
+        if sell_buffer > 0:
+            ma_desc += f"（缓冲{sell_buffer*100:g}%）"
         summary = f"✓ 完成：{n} 个标的 · {tf} · {ma_desc} · 成交={args.exec}" + (f" · 寻优 {optimize}" if optimize else "")
         return jsonify(ok=True, url=f"/report/{rid}", summary=summary)
     except Exception as e:  # noqa: BLE001
@@ -335,14 +350,14 @@ def report(rid):
     return Response(html, mimetype="text/html")
 
 
-def _open_browser():
+def _open_browser(port):
     time.sleep(1.0)
-    webbrowser.open("http://127.0.0.1:5000")
+    webbrowser.open(f"http://127.0.0.1:{port}")
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("BACKTEST_PORT", "5000"))
+    port = int(os.environ.get("BACKTEST_PORT", "5050"))
     if os.environ.get("BACKTEST_NO_BROWSER") != "1":
-        threading.Thread(target=_open_browser, daemon=True).start()
+        threading.Thread(target=lambda: _open_browser(port), daemon=True).start()
     print(f"图形界面已启动：http://127.0.0.1:{port}  （按 Ctrl+C 停止）")
     app.run(host="127.0.0.1", port=port, debug=False)
