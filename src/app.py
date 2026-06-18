@@ -15,6 +15,7 @@ import time
 import traceback
 import threading
 import webbrowser
+import math
 from types import SimpleNamespace
 
 try:
@@ -111,7 +112,7 @@ iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
     {% for code,name in presets %}
     <button type="button" onclick="setSymbol('{{code}}')">{{name}} {{code}}</button>
     {% endfor %}
-    <button type="button" onclick="addCompare()">+ 加入对比</button>
+    <button type="button" onclick="addCompare(this)">+ 加入对比</button>
   </div>
   <form id="form">
     <div class="grid">
@@ -214,8 +215,8 @@ function setSymbol(code){
     f.value=parts.join(',');
   }else{ f.value=code; }
 }
-function addCompare(){ compareMode=!compareMode;
-  event.target.textContent=compareMode?'✓ 对比模式(点指数追加)':'+ 加入对比'; }
+function addCompare(btn){ compareMode=!compareMode;
+  btn.textContent=compareMode?'✓ 对比模式(点指数追加)':'+ 加入对比'; }
 
 // 将内嵌报告的高度同步为其真实内容高度，从而去掉框内滚动条、让报告随主页面一起滚动。
 // 报告与本页同源（皆由本地 Flask 提供），可安全读取 contentDocument 测高。
@@ -278,11 +279,17 @@ def index():
     return render_template_string(PAGE, presets=PRESETS)
 
 
-def _to_float(v, default):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
+def _parse_float(v, default, label: str) -> float:
+    raw = "" if v is None else str(v).strip()
+    if raw == "":
         return default
+    try:
+        x = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{label}必须是数字") from exc
+    if not math.isfinite(x):
+        raise ValueError(f"{label}必须是有限数字")
+    return x
 
 
 @app.route("/run", methods=["POST"])
@@ -301,10 +308,20 @@ def run():
         buf_raw = (f.get("sell_buffer") or "").strip()
         sell_buffer = 0.0
         if buf_raw:
-            sell_buffer = _to_float(buf_raw, 0.0) / 100.0
-            if sell_buffer < 0:
-                return jsonify(ok=False, error="卖出缓冲比例必须 ≥ 0")
+            sell_buffer_pct = _parse_float(buf_raw, 0.0, "卖出缓冲比例")
+            if sell_buffer_pct < 0 or sell_buffer_pct >= 100:
+                return jsonify(ok=False, error="卖出缓冲比例必须在 0% 到小于 100% 之间")
+            sell_buffer = sell_buffer_pct / 100.0
         rid = str(int(time.time() * 1000))
+        commission = _parse_float(f.get("commission"), 0.0001, "单边佣金率")
+        slippage = _parse_float(f.get("slippage"), 0.0, "单边滑点率")
+        rf = _parse_float(f.get("rf"), 0.0, "无风险利率")
+        if commission < 0:
+            return jsonify(ok=False, error="单边佣金率必须 ≥ 0")
+        if slippage < 0:
+            return jsonify(ok=False, error="单边滑点率必须 ≥ 0")
+        if commission + slippage >= 1:
+            return jsonify(ok=False, error="单边佣金率 + 单边滑点率必须小于 100%")
 
         args = SimpleNamespace(
             symbol=symbol,
@@ -316,9 +333,9 @@ def run():
             timeframe=(f.get("timeframe") or "1d").strip(),
             start=(f.get("start") or "2021-01-01").strip(),
             end=((f.get("end") or "").strip() or None),
-            commission=_to_float(f.get("commission"), 0.0001),
-            slippage=_to_float(f.get("slippage"), 0.0),
-            rf=_to_float(f.get("rf"), 0.0),
+            commission=commission,
+            slippage=slippage,
+            rf=rf,
             exec=(f.get("exec") or "close"),
             optimize=optimize,
             output=None,   # 不写文件
@@ -336,6 +353,8 @@ def run():
             ma_desc += f"（缓冲{sell_buffer*100:g}%）"
         summary = f"✓ 完成：{n} 个标的 · {tf} · {ma_desc} · 成交={args.exec}" + (f" · 寻优 {optimize}" if optimize else "")
         return jsonify(ok=True, url=f"/report/{rid}", summary=summary)
+    except ValueError as e:
+        return jsonify(ok=False, error=str(e))
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return jsonify(ok=False, error=f"{type(e).__name__}: {e}")

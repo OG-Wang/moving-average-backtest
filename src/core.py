@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import sys
+import math
 from types import SimpleNamespace
 
 # 让 Windows 控制台也能正确显示中文
@@ -78,11 +79,13 @@ def _ma_pair(args) -> tuple[int, int]:
 
 
 def _sell_buffer(args) -> float:
-    """从 args 解析卖出缓冲比例（小数，如 0.02）。缺省或非法值视为 0（不启用）。"""
+    """从 args 解析卖出缓冲比例（小数，如 0.02）。缺省视为 0（不启用）。"""
     try:
         v = float(getattr(args, "sell_buffer", 0.0) or 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        raise ValueError("卖出缓冲比例必须是数字")
+    if not math.isfinite(v) or v < 0 or v >= 1:
+        raise ValueError("卖出缓冲比例必须在 0 到小于 1 之间")
     return v if v > 0 else 0.0
 
 
@@ -121,9 +124,10 @@ def run_one(symbol: str, args) -> dict:
                         rf=args.rf, periods_per_year=ppy)
     name = index_name(symbol)
     tf_tag = "" if timeframe in ("1d", "日线") else f" {timeframe}"
+    open_note = f"  持仓中 {m.get('open_trades', 0)} 笔" if m.get("open_trades", 0) else ""
     print(f"  {name}({symbol}){tf_tag} {_ma_label(buy, sell, require_order, sell_buffer)}: 总收益 {m['total_return']*100:.1f}%  "
           f"年化 {m['annual_return']*100:.1f}%  回撤 {m['max_drawdown']*100:.1f}%  "
-          f"夏普 {m['sharpe']:.2f}  交易 {m['n_trades']} 笔")
+          f"夏普 {m['sharpe']:.2f}  交易 {m['n_trades']} 笔{open_note}")
     return {"symbol": symbol, "label": f"{name}({symbol})", "res": res,
             "metrics": m, "df": df}
 

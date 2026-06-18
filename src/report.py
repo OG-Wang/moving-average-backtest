@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import html as html_lib
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.io import to_html
@@ -25,6 +27,11 @@ C_BENCH = "#9aa4b2"     # 基准线：灰
 C_BUY = "#d83a34"       # 买入：红（A股惯例 买红）
 C_SELL = "#2e9e5b"      # 卖出：绿（卖绿）
 C_DD = "#d83a34"        # 回撤填充
+
+
+def _esc(value) -> str:
+    return html_lib.escape("" if value is None else str(value), quote=True)
+
 
 _PLOT_LAYOUT = dict(
     paper_bgcolor=C_BG,
@@ -55,20 +62,25 @@ def _fig_to_div(fig: go.Figure, include_js: bool) -> str:
 
 def _equity_fig(panel: dict, show_markers: bool = True) -> go.Figure:
     res = panel["res"]
+    label = _esc(panel["label"])
     eq, bh = res.equity, res.buy_hold
     # 每个交易日给策略线附加一条文本：仅在当日确有买/卖时显示成交价，其余日期为空。
     # 用 customdata 挂到策略线上，既能精确到日、又不会在非交易日带出旧值。
     extra = pd.Series("", index=eq.index, dtype=object)
     if len(res.trades):
         for _, tr in res.trades.iterrows():
-            ed, xd = pd.Timestamp(tr["entry_date"]), pd.Timestamp(tr["exit_date"])
+            ed = pd.Timestamp(tr["entry_date"])
             if ed in extra.index:
                 extra.loc[ed] = f"<br>▲ 买入价 {tr['entry_price']:.2f}"
-            if xd in extra.index:
-                extra.loc[xd] = f"<br>▼ 卖出价 {tr['exit_price']:.2f}"
+            open_value = tr.get("is_open", False)
+            is_open = False if pd.isna(open_value) else bool(open_value)
+            if not is_open and pd.notna(tr["exit_date"]):
+                xd = pd.Timestamp(tr["exit_date"])
+                if xd in extra.index:
+                    extra.loc[xd] = f"<br>▼ 卖出价 {tr['exit_price']:.2f}"
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=f"{panel['label']} 策略",
+    fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=f"{label} 策略",
                              line=dict(color=C_STRAT, width=2),
                              customdata=extra.values,
                              hovertemplate="策略净值 %{y:.3f}%{customdata}<extra></extra>"))
@@ -77,17 +89,21 @@ def _equity_fig(panel: dict, show_markers: bool = True) -> go.Figure:
                              hovertemplate="买入持有 %{y:.3f}<extra></extra>"))
     if show_markers and len(res.trades):
         t = res.trades
+        open_mask = (t["is_open"].fillna(False).astype(bool)
+                     if "is_open" in t.columns else pd.Series(False, index=t.index))
+        closed = t.loc[~open_mask]
         buy_x = pd.to_datetime(t["entry_date"])
-        sell_x = pd.to_datetime(t["exit_date"])
         buy_y = eq.reindex(buy_x).values
-        sell_y = eq.reindex(sell_x).values
         # 买卖三角仅作可视标注，不并入统一悬停框（成交价已通过策略线的 customdata 在交易日显示）
         fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode="markers", name="买入", hoverinfo="skip",
                                  marker=dict(symbol="triangle-up", size=10, color=C_BUY,
                                              line=dict(width=0.5, color="#fff"))))
-        fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode="markers", name="卖出", hoverinfo="skip",
-                                 marker=dict(symbol="triangle-down", size=10, color=C_SELL,
-                                             line=dict(width=0.5, color="#fff"))))
+        if len(closed):
+            sell_x = pd.to_datetime(closed["exit_date"])
+            sell_y = eq.reindex(sell_x).values
+            fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode="markers", name="卖出", hoverinfo="skip",
+                                     marker=dict(symbol="triangle-down", size=10, color=C_SELL,
+                                                 line=dict(width=0.5, color="#fff"))))
     fig.update_layout(**_PLOT_LAYOUT, height=420)
     fig.update_yaxes(title_text="净值（起点=1.0）")
     fig.update_xaxes(hoverformat="%Y-%m-%d")  # 悬停日期精确到日
@@ -99,9 +115,10 @@ def _multi_equity_fig(panels: list[dict]) -> go.Figure:
     fig = go.Figure()
     for i, p in enumerate(panels):
         eq = p["res"].equity
-        fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=p["label"],
+        label = _esc(p["label"])
+        fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=label,
                                  line=dict(color=palette[i % len(palette)], width=2),
-                                 hovertemplate=f"{p['label']} %{{y:.3f}}<extra></extra>"))
+                                 hovertemplate="净值 %{y:.3f}<extra></extra>"))
     fig.update_layout(**_PLOT_LAYOUT, height=460)
     fig.update_yaxes(title_text="净值（起点=1.0）")
     fig.update_xaxes(hoverformat="%Y-%m-%d")
@@ -162,11 +179,11 @@ def _optimize_fig(opt: pd.DataFrame) -> go.Figure:
 def _metric_cards(m: dict) -> str:
     def card(label, value, good=None, sub="", tip=""):
         cls = "" if good is None else (" pos" if good else " neg")
-        sub_html = f'<div class="sub">{sub}</div>' if sub else ""
-        title_attr = f' title="{tip}"' if tip else ""
+        sub_html = f'<div class="sub">{_esc(sub)}</div>' if sub else ""
+        title_attr = f' title="{_esc(tip)}"' if tip else ""
         info = '<span class="info">ⓘ</span>' if tip else ""
-        return (f'<div class="card{cls}"{title_attr}><div class="lbl">{label}{info}</div>'
-                f'<div class="val">{value}</div>{sub_html}</div>')
+        return (f'<div class="card{cls}"{title_attr}><div class="lbl">{_esc(label)}{info}</div>'
+                f'<div class="val">{_esc(value)}</div>{sub_html}</div>')
 
     cards = [
         card("总收益率", _pct(m["total_return"]), m["total_return"] > 0,
@@ -205,9 +222,9 @@ def _yearly_table(res) -> str:
         cells = "".join(
             f'<td class="{"pos" if v > 0 else "neg"}">{_pct(v)}</td>' for v in yr.values
         )
-        return f'<tr><td>{label}</td>{cells}</tr>'
+        return f'<tr><td>{_esc(label)}</td>{cells}</tr>'
 
-    head = "".join(f"<th>{y}</th>" for y in years)
+    head = "".join(f"<th>{_esc(y)}</th>" for y in years)
     return (f'<table class="yearly"><thead><tr><th>年份</th>{head}</tr></thead><tbody>'
             f'{row("策略", strat_yr)}{row("买入持有", bh_yr)}</tbody></table>')
 
@@ -218,15 +235,22 @@ def _trades_table(trades: pd.DataFrame) -> str:
     rows = []
     for _, r in trades.iterrows():
         cls = "pos" if r["win"] else "neg"
+        open_value = r.get("is_open", False)
+        is_open = False if pd.isna(open_value) else bool(open_value)
+        exit_date = "" if is_open or pd.isna(r["exit_date"]) else _esc(r["exit_date"])
+        exit_price = "" if is_open or pd.isna(r["exit_price"]) else f'{r["exit_price"]:.2f}'
+        ret = _pct(r["return"])
+        if is_open:
+            ret += '<div class="muted" style="font-size:11.5px">截止运行日的收益率</div>'
         rows.append(
-            f'<tr><td>{r["entry_date"]}</td><td>{r["entry_price"]:.2f}</td>'
-            f'<td>{r["exit_date"]}</td><td>{r["exit_price"]:.2f}</td>'
-            f'<td>{r["holding_days"]}</td><td class="{cls}">{_pct(r["return"])}</td></tr>'
+            f'<tr><td>{_esc(r["entry_date"])}</td><td>{r["entry_price"]:.2f}</td>'
+            f'<td>{exit_date}</td><td>{exit_price}</td>'
+            f'<td>{r["holding_days"]}</td><td class="{cls}">{ret}</td></tr>'
         )
     return (
         '<div class="tbl-wrap"><table class="trades"><thead><tr>'
         '<th>买入日</th><th>买入价</th><th>卖出日</th><th>卖出价</th>'
-        '<th>持仓天数</th><th>本笔收益</th></tr></thead><tbody>'
+        '<th>持仓天数</th><th>收益率</th></tr></thead><tbody>'
         + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -242,7 +266,7 @@ def _optimize_table(opt: pd.DataFrame) -> str:
             f'<td class="neg">{_pct(r["max_drawdown"])}</td>'
             f'<td>{r["sharpe"]:.2f}</td><td>{r["calmar"]:.2f}</td>'
             f'<td>{int(r["n_trades"])}</td><td>{_pct(r["win_rate"],1)}</td>'
-            f'<td>{r.get("reason","")}</td></tr>'
+            f'<td>{_esc(r.get("reason",""))}</td></tr>'
         )
     return (
         '<div class="tbl-wrap"><table class="trades"><thead><tr>'
@@ -253,7 +277,7 @@ def _optimize_table(opt: pd.DataFrame) -> str:
 
 
 def _comparison_table(panels: list[dict]) -> str:
-    head = "".join(f"<th>{p['label']}</th>" for p in panels)
+    head = "".join(f"<th>{_esc(p['label'])}</th>" for p in panels)
     metric_rows = [
         ("总收益率", lambda m: _pct(m["total_return"]), "total_return"),
         ("年化收益率", lambda m: _pct(m["annual_return"]), "annual_return"),
@@ -275,8 +299,8 @@ def _comparison_table(panels: list[dict]) -> str:
             cls = ""
             if signkey:
                 cls = "pos" if p["metrics"][signkey] > 0 else "neg"
-            cells += f'<td class="{cls}">{v}</td>'
-        body += f"<tr><td>{label}</td>{cells}</tr>"
+            cells += f'<td class="{cls}">{_esc(v)}</td>'
+        body += f"<tr><td>{_esc(label)}</td>{cells}</tr>"
     return (f'<div class="tbl-wrap"><table class="trades cmp"><thead><tr><th>指标</th>{head}</tr></thead>'
             f'<tbody>{body}</tbody></table></div>')
 
@@ -352,7 +376,10 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
             f'<div style="margin-top:14px">{_yearly_table(p["res"])}</div></section>'
         )
         body_parts.append(f'<section><h2>月度收益热力图</h2>{emit(_monthly_heatmap_fig(p))}</section>')
-        body_parts.append(f'<section><h2>交易明细（{m["n_trades"]} 笔）</h2>{_trades_table(p["res"].trades)}</section>')
+        open_trades = int(m.get("open_trades", 0))
+        trade_title = (f'交易明细（{m["n_trades"]} 笔已平仓，{open_trades} 笔持仓中）'
+                       if open_trades else f'交易明细（{m["n_trades"]} 笔）')
+        body_parts.append(f'<section><h2>{trade_title}</h2>{_trades_table(p["res"].trades)}</section>')
     else:
         body_parts.append(f'<section><h2>绩效对比</h2>{_comparison_table(panels)}</section>')
         body_parts.append(f'<section><h2>净值曲线对比</h2>{emit(_multi_equity_fig(panels))}</section>')
@@ -376,7 +403,7 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
                    '其下方小幅波动继续持有。' if _buf > 0 else '')
     note = (
         '<div class="note">'
-        f'策略：{meta.get("ma_desc","MA")} —— 收盘价上穿买入均线当日买入、跌破卖出均线当日卖出（满仓/空仓择时）。'
+        f'策略：{_esc(meta.get("ma_desc","MA"))} —— 收盘价上穿买入均线当日买入、跌破卖出均线当日卖出（满仓/空仓择时）。'
         f'{order_note}'
         f'{buffer_note}'
         f'成交模式：{"次日开盘价" if meta.get("exec_mode")=="next_open" else "当日收盘价"}成交；'
@@ -384,13 +411,13 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
         + (f'，滑点 {meta.get("slippage",0)*1e4:.1f}‱' if meta.get("slippage") else "") + '。<br>'
         '说明：当日收盘价成交模式含轻微未来函数（以当日收盘价决策并成交），属日线回测常规简化；'
         '如需更贴近实盘可选「次日开盘」成交。指数不可直接交易，本结果仅为策略验证，不构成投资建议。<br>'
-        f'数据源：akshare（新浪财经/东方财富等）。生成区间：{meta.get("start")} ~ {meta.get("end")}。'
+        f'数据源：akshare（新浪财经/东方财富等）。生成区间：{_esc(meta.get("start"))} ~ {_esc(meta.get("end"))}。'
         '</div>'
     )
     footer = '<div class="copyright">Copyright © Rick</div>'
 
-    title = meta.get("title", "指数均线择时回测报告")
-    subtitle = meta.get("subtitle", "")
+    title = _esc(meta.get("title", "指数均线择时回测报告"))
+    subtitle = _esc(meta.get("subtitle", ""))
     html = (
         f'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'

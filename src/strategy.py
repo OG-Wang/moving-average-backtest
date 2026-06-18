@@ -52,12 +52,13 @@ class MovingAverageStrategy(Strategy):
             sell_window = buy_window
         if buy_window < 1 or sell_window < 1:
             raise ValueError("均线周期必须 >= 1")
-        if sell_buffer < 0:
-            raise ValueError("卖出缓冲比例必须 >= 0")
+        sell_buffer = float(sell_buffer)
+        if not np.isfinite(sell_buffer) or sell_buffer < 0 or sell_buffer >= 1:
+            raise ValueError("卖出缓冲比例必须在 0 到小于 1 之间")
         self.buy_window = buy_window
         self.sell_window = sell_window
         self.require_ma_order = require_ma_order
-        self.sell_buffer = float(sell_buffer)
+        self.sell_buffer = sell_buffer
         # window 保留为买入均线周期，兼容仅关心单一周期的旧调用方
         self.window = buy_window
         # 顺势过滤仅在「买入周期 < 卖出周期」时有意义；其余情形视为无害不启用

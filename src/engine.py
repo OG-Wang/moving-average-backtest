@@ -39,8 +39,16 @@ class BacktestEngine:
             raise ValueError("exec_mode 必须是 'close' 或 'next_open'")
         self.commission = float(commission)
         self.slippage = float(slippage)
+        if not np.isfinite(self.commission) or not np.isfinite(self.slippage):
+            raise ValueError("commission/slippage 必须是有限数字")
+        if self.commission < 0:
+            raise ValueError("commission 必须 >= 0")
+        if self.slippage < 0:
+            raise ValueError("slippage 必须 >= 0")
         self.exec_mode = exec_mode
         self.cost = self.commission + self.slippage  # 单边总成本率
+        if self.cost >= 1:
+            raise ValueError("commission + slippage 必须 < 1")
 
     def run(
         self,
@@ -115,12 +123,9 @@ class BacktestEngine:
                 equity[t] = eq
                 pos_held[t] = 1 if in_pos else 0
 
-        # 末日仍持仓 -> 按最后一日收盘价强制平仓结算
+        # 期末仍持仓：不强制平仓、不扣卖出成本；仅在交易明细里保留一条持仓中的盯市记录。
         if in_pos:
-            eq *= (1 - cost)
-            trades.append(self._close_trade(dates, entry_idx, entry_price, n - 1, c[n - 1]))
-            equity[-1] = eq
-            pos_held[-1] = 0
+            trades.append(self._open_trade(dates, entry_idx, entry_price, n - 1, c[n - 1]))
 
         equity_s = pd.Series(equity, index=dates, name="strategy")
         daily_ret = equity_s.pct_change().fillna(0.0)
@@ -130,7 +135,7 @@ class BacktestEngine:
         trades_df = pd.DataFrame(
             trades,
             columns=["entry_date", "entry_price", "exit_date", "exit_price",
-                     "holding_days", "return", "win"],
+                     "holding_days", "return", "win", "is_open"],
         )
 
         return BacktestResult(
@@ -163,4 +168,20 @@ class BacktestEngine:
             "holding_days": holding_days,
             "return": net,
             "win": net > 0,
+            "is_open": False,
+        }
+
+    def _open_trade(self, dates, entry_idx, entry_price, last_idx, last_price) -> dict:
+        # 未平仓持仓按最后一日收盘价盯市；收益含买入成本，不含卖出成本。
+        mtm = (last_price / entry_price) * (1 - self.cost) - 1.0
+        holding_days = int(last_idx - entry_idx)
+        return {
+            "entry_date": dates[entry_idx].date(),
+            "entry_price": round(float(entry_price), 3),
+            "exit_date": pd.NA,
+            "exit_price": pd.NA,
+            "holding_days": holding_days,
+            "return": mtm,
+            "win": mtm > 0,
+            "is_open": True,
         }

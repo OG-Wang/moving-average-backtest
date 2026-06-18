@@ -74,20 +74,34 @@ def compute_metrics(
     mdd, dd_peak, dd_trough = max_drawdown(equity)
     calmar = float(ann_return / abs(mdd)) if mdd < 0 else 0.0
 
-    # 交易层面
-    n_trades = int(len(trades))
-    if n_trades > 0:
-        wins = trades[trades["win"]]
-        losses = trades[~trades["win"]]
-        win_rate = len(wins) / n_trades
+    # 交易层面：未平仓持仓参与胜率/盈亏比，按当前盯市收益正负判断；
+    # 但交易次数和持仓天数类指标仍只统计完整买卖回合。
+    if "is_open" in trades.columns:
+        open_mask = trades["is_open"].fillna(False).astype(bool)
+        closed_trades = trades.loc[~open_mask]
+        open_trades = int(open_mask.sum())
+    else:
+        closed_trades = trades
+        open_trades = 0
+
+    n_trades = int(len(closed_trades))
+    scored_trades = trades
+    n_scored = int(len(scored_trades))
+    if n_scored > 0:
+        wins = scored_trades[scored_trades["win"]]
+        losses = scored_trades[~scored_trades["win"]]
+        win_rate = len(wins) / n_scored
         avg_win = float(wins["return"].mean()) if len(wins) else 0.0
         avg_loss = float(losses["return"].mean()) if len(losses) else 0.0
         # 盈亏比 = 平均盈利 / 平均亏损绝对值
         profit_loss_ratio = float(avg_win / abs(avg_loss)) if avg_loss < 0 else float("inf")
-        hold = trades["holding_days"]
-        avg_hold, max_hold, min_hold = float(hold.mean()), int(hold.max()), int(hold.min())
     else:
         win_rate = avg_win = avg_loss = profit_loss_ratio = 0.0
+
+    if n_trades > 0:
+        hold = closed_trades["holding_days"]
+        avg_hold, max_hold, min_hold = float(hold.mean()), int(hold.max()), int(hold.min())
+    else:
         avg_hold = max_hold = min_hold = 0
 
     # 买入持有基准
@@ -105,6 +119,7 @@ def compute_metrics(
         "sortino": sortino,
         "calmar": calmar,
         "n_trades": n_trades,
+        "open_trades": open_trades,
         "win_rate": win_rate,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
