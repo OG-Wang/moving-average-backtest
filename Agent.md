@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-**核心功能**：均线择时策略回测，支持 A股/全球/港股指数日线 + 美股日内(4h/2h/1h/30m)
+**核心功能**：均线择时策略回测，支持 A股/全球/港股指数/美股日线，美股日内(4h/2h/1h/30m)，以及 BTC/ETH/BNB 的 Binance Spot 现货日线与日内(4h/2h/1h/30m)
 
 **技术栈**：Python 3.9+, Flask, Pandas, NumPy, Plotly
 
@@ -50,7 +50,7 @@ fetch_bars(symbol, timeframe, ...)
     → engine.run(df, signals)
     → SimpleNamespace(equity, daily_returns, trades, buy_hold, meta)
     → compute_metrics(...)
-    → dict{total_return, sharpe, max_drawdown, ...}
+    → dict{total_return, peak_return, sharpe, max_drawdown, ...}
     → render_html(...)
     → str (HTML)
 ```
@@ -75,9 +75,13 @@ def fetch_bars(symbol: str, timeframe: str, start: str | None = None,
     - 全球指数: index_global_hist_sina (新浪, 东方财富兜底)
     - 港股指数: stock_hk_index_daily_sina (新浪, 东方财富兜底)
     - 美股日内: TwelveData API (需 TWELVE_DATA_API_KEY)
+    - 加密货币现货: Binance Spot klines (免费、无需 key，仅 BTC/ETH/BNB 与对应 USDT 交易对)
 
-    缓存位置：data_cache/{timeframe}/{symbol}_{timeframe}.csv
-    缓存逻辑：首次下载后永久缓存，refresh=True 强制刷新
+    缓存位置：
+    - 日线股票/指数: data_cache/{cache_key}_daily.csv
+    - 美股日内: data_cache/us_{SYM}_{timeframe}.csv
+    - 加密货币: data_cache/crypto_{PAIR}_{daily|timeframe}.csv
+    缓存逻辑：优先读本地 CSV；缺更早数据、不够新或 refresh=True 时联网更新并合并去重
     预热：warmup 额外获取数据以支持均线计算（不进入回测结果）
 
     返回数据至少包含：date(索引), open, high, low, close, volume
@@ -85,14 +89,24 @@ def fetch_bars(symbol: str, timeframe: str, start: str | None = None,
 ```
 
 **重要常量**：
-- `DATA_CACHE_DIR = "data_cache/"`
+- `CACHE_DIR = "data_cache/"`
 - `_is_us(symbol)` → bool: 判断是否美股
-- `daily_symbol_label(symbol)` → str | None: 特殊指数名称映射
+- `_is_crypto(symbol)` → bool: 判断是否为内置支持的加密货币现货（BTC/ETH/BNB）
+- `daily_symbol_label(symbol)` → str | None: 特殊指数/加密货币显示名称映射
+- `TIMEFRAME_TO_TD` → 美股日内时间框架到 Twelve Data interval 的映射
+- `TIMEFRAME_TO_BINANCE` → 加密货币时间框架到 Binance interval 的映射
+- `BINANCE_SPOT_KLINES_URLS` → Binance Spot 公开 K 线入口，优先 data-api.binance.vision，回退 api.binance.com
 
 **扩展新数据源**：
 1. 实现返回标准 DataFrame 的函数
 2. 在 `fetch_bars` 中添加路由判断
-3. 参考 `index_global_hist_sina` 的重试+缓存模式
+3. 参考 `index_global_hist_sina` 或 `fetch_crypto_bars` 的重试+缓存模式
+4. 若扩展加密货币，先确认用户是否要扩大白名单；当前设计只支持 BTC/ETH/BNB，不自动接受任意 USDT 交易对
+
+**加密货币约定**：
+- 只使用 Binance Spot 现货 K 线：`BTCUSDT`、`ETHUSDT`、`BNBUSDT`
+- 不使用 Binance USD-M futures 路径（`data/futures/um/...`）或 `fapi.binance.com`
+- Binance 默认按 UTC+0 切 K 线；代码用 UTC open time 转成无时区 datetime 索引。日线 `2024-01-01` 对应北京时间 `2024-01-01 08:00` 到 `2024-01-02 07:59:59.999`
 
 ---
 
@@ -200,25 +214,30 @@ def compute_metrics(equity: pd.Series, daily_returns: pd.Series,
     """
     返回字典包含以下键：
     - total_return: 总收益率
+    - peak_return: 期间最高收益率 = max(equity) - 1
     - annual_return: 年化收益率
     - max_drawdown: 最大回撤 (负值)
     - sharpe: 夏普比率
     - sortino: Sortino 比率
     - calmar: Calmar 比率
-    - annual_volatility: 年化波动率
     - n_trades: 总交易数
+    - open_trades: 仍在持仓中的交易数
     - win_rate: 胜率
-    - profit_factor: 盈亏比
+    - profit_loss_ratio: 盈亏比 = 平均盈利 / 平均亏损绝对值
     - avg_holding_days: 平均持仓天数
     - max_holding_days: 最大持仓天数
     - min_holding_days: 最小持仓天数
-    - buy_hold_return: 买入持有收益率
+    - bh_total_return: 买入持有总收益率
+    - bh_peak_return: 买入持有期间最高收益率
+    - bh_annual_return: 买入持有年化收益率
+    - bh_max_drawdown: 买入持有最大回撤
     """
 ```
 
 **核心公式**：
 - 年化收益率：`(1 + total_return) ** (periods_per_year / n_bars) - 1`
-- 夏普比率：`(annual_return - rf) / annual_volatility`
+- 期间最高收益率：`equity.max() - 1`
+- 夏普比率：`mean(daily_returns - rf / periods_per_year) / std(daily_returns) * sqrt(periods_per_year)`
 - Sortino 比率：类似，分母只计算下行波动
 
 ---
@@ -275,7 +294,7 @@ def execute(args) -> SimpleNamespace:
 **内部辅助函数**：
 - `_ma_pair(args)` → (buy, sell)
 - `_sell_buffer(args)` → float
-- `_periods_per_year(timeframe, index)` → float
+- `_periods_per_year(timeframe, index, symbol=None)` → float；股票/指数日线固定 252，加密货币与日内按实际 bar 密度推算
 - `run_one(symbol, args)` → dict (单标的回测结果)
 
 ---
@@ -296,6 +315,17 @@ GET  /report/<rid>    → 获取报告 HTML
 **配置**：
 - 端口：`BACKTEST_PORT` 环境变量 (默认 5050)
 - 自动打开浏览器：`BACKTEST_NO_BROWSER=1` 禁用
+
+---
+
+### src/report.py - Report Layer
+
+**关键约定**：
+- 单标的报告的关键指标区保持 10 张卡片（桌面端 5×2）。
+- 收益类卡片包含：总收益率、年化收益率、期间最高收益率、最大回撤。
+- `期间最高收益率` 展示策略 `peak_return`，sub 文案展示买入持有 `bh_peak_return`，形式与总收益/年化收益一致。
+- `胜率` 与 `盈亏比` 合并为一张 `胜率 / 盈亏比` 卡片，显示如 `55.0% / 1.40`，用于维持 10 卡片布局。
+- 多标的对比表也应包含 `期间最高收益率` 和 `买入持有最高收益`，避免单标的/多标的信息口径不一致。
 
 ---
 
@@ -355,10 +385,12 @@ if _is_my_source(symbol):
 # 1. 在 metrics.py 中 compute_metrics() 添加计算
 metrics['my_new_metric'] = my_calculation(equity, trades)
 
-# 2. 在 report.py 中 render_html() 添加显示
-# 查找 "绩效指标" 表格，添加新行
+# 2. 在 report.py 中添加显示
+# 单标的关键指标卡片在 _metric_cards()；多标的对比表在 _comparison_table()
+# 注意单标的关键指标区当前约定为 10 张卡片，新增卡片时需要合并/替换相关指标以保持 5×2 布局
 
-# 3. 考虑是否需要在交易明细中添加列
+# 3. 考虑是否需要同步 README.md / Agent.md 的指标契约
+# 4. 考虑是否需要在交易明细中添加列
 ```
 
 ---
@@ -375,7 +407,10 @@ metrics['my_new_metric'] = my_calculation(equity, trades)
 **原因**：
 - 免费数据源有请求限制和延迟
 - 回测结果可复现
-- 缓存文件命名规则：`{timeframe}/{symbol}_{timeframe}.csv`
+- 缓存文件命名规则：
+  - 日线股票/指数：`data_cache/{cache_key}_daily.csv`
+  - 美股日内：`data_cache/us_{SYM}_{timeframe}.csv`
+  - 加密货币：`data_cache/crypto_{PAIR}_{daily|timeframe}.csv`
 
 ### 3. 双均线支持
 **原因**：
@@ -424,6 +459,18 @@ metrics['my_new_metric'] = my_calculation(equity, trades)
 **问题**：`start_ui.bat` 是 Windows 专用
 **解决**：见 README 的 macOS/Linux 启动说明
 
+### 7. 加密货币白名单与市场类型
+**问题**：`BNB` 等字母代码若不先被 `_is_crypto` 捕获，会被 `_is_us` 误判为美股。
+**解决**：加密货币必须先走 `_crypto_route` / `_is_crypto`；当前仅支持 BTC/ETH/BNB 及对应 USDT 现货交易对。
+
+### 8. Binance Spot vs Futures
+**问题**：相邻项目 `D:\Others\indicator\data` 是 Binance USD-M Futures perpetual，路径为 `data/futures/um/...`，不符合本项目“现货”要求。
+**解决**：本项目只能用 Binance Spot K 线入口和现货交易对；不要复用 futures CSV、`fapi` endpoint 或 `futures/um` raw archive。
+
+### 9. 加密货币日线时区
+**问题**：Binance 默认 K 线按 UTC+0 切分，和北京时间自然日不同。
+**解决**：代码按 UTC open time 建索引；日线标签 `YYYY-MM-DD` 对应 UTC 当日 00:00 开盘，即北京时间当日 08:00 到次日 07:59:59.999。
+
 ---
 
 ## File Structure Reference
@@ -440,9 +487,12 @@ backtest/
 │   ├── optimize.py     # 参数寻优
 │   └── report.py       # HTML 报告生成
 ├── data_cache/         # 数据缓存目录（.gitignore）
-│   ├── 1d/
-│   ├── 4h/
-│   └── ...
+│   ├── sh000688_daily.csv
+│   ├── us_SOXL_daily.csv
+│   ├── us_SOXL_1h.csv
+│   ├── crypto_BTCUSDT_daily.csv
+│   ├── crypto_ETHUSDT_1h.csv
+│   └── crypto_BNBUSDT_daily.csv
 ├── .venv/              # Windows 虚拟环境（.gitignore）
 ├── start_ui.bat        # Windows 一键启动
 ├── requirements.txt    # Python 依赖
@@ -462,7 +512,7 @@ backtest/
 | 添加新指标 | src/metrics.py | `compute_metrics()` |
 | 修改报告布局 | src/report.py | `render_html()` |
 | 添加 UI 参数 | src/app.py | PAGE HTML 模板 + `/run` 处理 |
-| 修改缓存路径 | src/data.py | `DATA_CACHE_DIR` 常量 |
+| 修改缓存路径 | src/data.py | `CACHE_DIR` 常量 |
 | 调整默认参数 | src/app.py | 表单默认值 |
 
 ---

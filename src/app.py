@@ -50,7 +50,8 @@ PRESETS = [
     ("000688", "科创50"), ("000300", "沪深300"), ("000905", "中证500"),
     ("000001", "上证指数"), ("399006", "创业板指"), ("000852", "中证1000"),
     ("000016", "上证50"), ("899050", "北证50"), ("N225", "日经225"),
-    ("HSTECH", "恒生科技"), ("HSI", "恒生指数"), ("SOXL", "美股"), ("TQQQ", "美股"),
+    ("HSTECH", "恒生科技"), ("HSI", "恒生指数"), ("BTC", "比特币"), ("ETH", "以太坊"),
+    ("BNB", "BNB"), ("SOXL", "美股"), ("TQQQ", "美股"),
 ]
 
 PAGE = """<!DOCTYPE html>
@@ -102,8 +103,8 @@ iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
 </style></head>
 <body><div class="wrap">
 <header class="top">
-  <h1>均线择时回测 · A股指数 / 全球指数 / 美股</h1>
-  <div class="meta">收盘价上穿买入均线买入 · 跌破卖出均线卖出（可设不同周期）· 本地图形界面（数据源：新浪财经 / 东方财富）</div>
+  <h1>均线择时回测 · A股指数 / 全球指数 / 美股 / 加密货币</h1>
+  <div class="meta">收盘价上穿买入均线买入 · 跌破卖出均线卖出（可设不同周期）· 本地图形界面（数据源：新浪财经 / 东方财富 / Binance 现货）</div>
 </header>
 
 <div class="card">
@@ -119,7 +120,7 @@ iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
       <div class="field col2">
         <label>标的代码（多个用英文逗号分隔则对比）</label>
         <input name="symbol" id="symbol" value="000688" />
-        <span class="hint">A股指数如 000688；全球/港股指数如 N225、HSTECH、HSI；美股如 SOXL、TQQQ；可混合对比 000688,N225,HSTECH</span>
+        <span class="hint">A股指数如 000688；全球/港股指数如 N225、HSTECH、HSI；美股如 SOXL、TQQQ；加密货币如 BTC、ETH、BNB；可混合对比 000688,BTC,ETH,BNB</span>
       </div>
       <div class="field">
         <label>买入均线（上穿买入）</label>
@@ -144,12 +145,12 @@ iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
         <label>时间框架</label>
         <select name="timeframe">
           <option value="1d">日线（默认）</option>
-          <option value="4h">4 小时（仅美股）</option>
-          <option value="2h">2 小时（仅美股）</option>
-          <option value="1h">1 小时（仅美股）</option>
-          <option value="30m">30 分钟（仅美股）</option>
+          <option value="4h">4 小时（美股 / 加密货币）</option>
+          <option value="2h">2 小时（美股 / 加密货币）</option>
+          <option value="1h">1 小时（美股 / 加密货币）</option>
+          <option value="30m">30 分钟（美股 / 加密货币）</option>
         </select>
-        <span class="hint">日线支持 A股/全球/港股/美股；日内仅美股 · 数据源 Twelve Data</span>
+        <span class="hint">日线支持 A股/全球/港股/美股/加密货币；日内支持美股和加密货币 · 美股日内用 Twelve Data，BTC/ETH/BNB 用 Binance 现货</span>
       </div>
       <div class="field">
         <label>成交时点</label>
@@ -216,7 +217,7 @@ function setSymbol(code){
   }else{ f.value=code; }
 }
 function addCompare(btn){ compareMode=!compareMode;
-  btn.textContent=compareMode?'✓ 对比模式(点指数追加)':'+ 加入对比'; }
+  btn.textContent=compareMode?'✓ 对比模式(点标的追加)':'+ 加入对比'; }
 
 // 将内嵌报告的高度同步为其真实内容高度，从而去掉框内滚动条、让报告随主页面一起滚动。
 // 报告与本页同源（皆由本地 Flask 提供），可安全读取 contentDocument 测高。
@@ -298,7 +299,7 @@ def run():
     try:
         symbol = (f.get("symbol") or "").strip()
         if not symbol:
-            return jsonify(ok=False, error="请填写指数代码")
+            return jsonify(ok=False, error="请填写标的代码")
         ma_buy = int(f.get("ma_buy") or f.get("ma") or 20)
         ma_sell = int(f.get("ma_sell") or f.get("ma") or ma_buy)
         if ma_buy < 1 or ma_sell < 1:

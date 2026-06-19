@@ -1,9 +1,10 @@
-"""数据层：获取 A 股指数 / 全球指数 / 美股个股日线数据。
+"""数据层：获取 A 股指数 / 全球指数 / 美股个股 / 加密货币数据。
 
-支持两类标的，按代码自动判别（见 _is_us）：
+支持以下标的，按代码自动判别（见 _is_us）：
   - A 股指数：纯数字代码（如 000688）或带 sh/sz 前缀。
   - 全球/港股指数：常用别名（如 日经225/N225、恒生指数/HSI、恒生科技/HSTECH）。
   - 美股个股/ETF：含字母的代码（如 SOXL、TQQQ、AAPL）。
+  - 加密货币现货：BTC/ETH/BNB 及对应 USDT 现货交易对别名。
 
 数据源策略（按此环境实测可靠性排序）：
   A 股指数：
@@ -17,6 +18,8 @@
   港股指数：
     1) 新浪财经  ak.stock_hk_index_daily_sina   —— 主源
     2) 东方财富  ak.stock_hk_index_daily_em     —— 备用源
+  加密货币：
+    1) Binance Spot 公开 K 线接口             —— 免费、无需 key，仅使用现货 BTCUSDT/ETHUSDT/BNBUSDT
 
 缓存与覆盖逻辑（每个指数只保存一个 CSV，内容始终是"最早～最新"的最全数据）：
   - 日线数据源通常【没有日期参数】，单次请求即返回该标的可得的全部历史，
@@ -74,13 +77,44 @@ _SPECIAL_DAILY_ROUTES = {
     "hstech": {"kind": "hk", "fetch_id": "HSTECH", "cache_key": "hk_HSTECH", "label": "恒生科技"},
 }
 
+_CRYPTO_ROUTES = {
+    "btc": {"kind": "crypto", "fetch_id": "BTCUSDT", "cache_key": "crypto_BTCUSDT", "label": "比特币"},
+    "btcusdt": {"kind": "crypto", "fetch_id": "BTCUSDT", "cache_key": "crypto_BTCUSDT", "label": "比特币"},
+    "eth": {"kind": "crypto", "fetch_id": "ETHUSDT", "cache_key": "crypto_ETHUSDT", "label": "以太坊"},
+    "ethusdt": {"kind": "crypto", "fetch_id": "ETHUSDT", "cache_key": "crypto_ETHUSDT", "label": "以太坊"},
+    "bnb": {"kind": "crypto", "fetch_id": "BNBUSDT", "cache_key": "crypto_BNBUSDT", "label": "BNB"},
+    "bnbusdt": {"kind": "crypto", "fetch_id": "BNBUSDT", "cache_key": "crypto_BNBUSDT", "label": "BNB"},
+}
+
+BINANCE_SPOT_KLINES_URLS = [
+    "https://data-api.binance.vision/api/v3/klines",
+    "https://api.binance.com/api/v3/klines",
+]
+
+TIMEFRAME_TO_BINANCE = {
+    "30m": "30m",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "1d": "1d",
+}
+
 
 def _alias_key(code: str) -> str:
-    return str(code).strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+    return str(code).strip().lower().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
 
 
 def _special_daily_route(code: str) -> dict | None:
     return _SPECIAL_DAILY_ROUTES.get(_alias_key(code))
+
+
+def _crypto_route(code: str) -> dict | None:
+    return _CRYPTO_ROUTES.get(_alias_key(code))
+
+
+def _is_crypto(code: str) -> bool:
+    """判断标的是否为内置支持的加密货币现货交易对。"""
+    return _crypto_route(code) is not None
 
 
 def _is_us(code: str) -> bool:
@@ -90,6 +124,8 @@ def _is_us(code: str) -> bool:
     """
     code = str(code).strip()
     if not code:
+        return False
+    if _is_crypto(code):
         return False
     if _special_daily_route(code):
         return False
@@ -108,6 +144,9 @@ def to_sina_symbol(code: str) -> str:
       若已带前缀（sh/sz/bj 开头）则原样返回。
     """
     code = str(code).strip()
+    crypto = _crypto_route(code)
+    if crypto:
+        return crypto["fetch_id"]
     route = _special_daily_route(code)
     if route:
         return route["fetch_id"]
@@ -125,6 +164,9 @@ def to_sina_symbol(code: str) -> str:
 
 def daily_symbol_label(code: str) -> str | None:
     """返回特殊日线标的的显示名称；非特殊标的返回 None。"""
+    crypto = _crypto_route(code)
+    if crypto:
+        return crypto["label"]
     route = _special_daily_route(code)
     return route["label"] if route else None
 
@@ -166,6 +208,9 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _daily_route(symbol: str) -> dict:
+    crypto = _crypto_route(symbol)
+    if crypto:
+        return crypto
     route = _special_daily_route(symbol)
     if route:
         return route
@@ -306,6 +351,137 @@ def _fetch_hk_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
     raise ConnectionError(f"所有港股指数数据源均获取失败：{type(last_err).__name__}: {last_err}")
 
 
+def _normalize_timeframe_key(timeframe: str | None) -> str:
+    """把 UI/调用方传入的时间框架规范成内部 key。"""
+    if timeframe in (None, "1d", "日线", "day", "daily"):
+        return "1d"
+    return str(timeframe).strip()
+
+
+def _binance_interval_ms(interval: str) -> int:
+    unit = interval[-1]
+    try:
+        n = int(interval[:-1])
+    except ValueError as exc:
+        raise ValueError(f"不支持的 Binance K 线周期：{interval}") from exc
+    if unit == "m":
+        return n * 60_000
+    if unit == "h":
+        return n * 60 * 60_000
+    if unit == "d":
+        return n * 24 * 60 * 60_000
+    raise ValueError(f"不支持的 Binance K 线周期：{interval}")
+
+
+def _ts_to_ms(ts) -> int:
+    """把 pandas/字符串时间转为 UTC 毫秒时间戳。"""
+    stamp = pd.to_datetime(ts)
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize("UTC")
+    else:
+        stamp = stamp.tz_convert("UTC")
+    return int(stamp.timestamp() * 1000)
+
+
+def _empty_ohlcv() -> pd.DataFrame:
+    return pd.DataFrame(columns=_STD_COLS, index=pd.DatetimeIndex([], name="date"))
+
+
+def _request_binance_klines(params: dict, retries: int = 3) -> list:
+    """请求 Binance 现货 K 线；仅调用公开 market data 接口，无需 key。"""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    last_err: Exception | None = None
+    for url in BINANCE_SPOT_KLINES_URLS:
+        for attempt in range(1, retries + 1):
+            try:
+                query = urllib.parse.urlencode(params)
+                req = urllib.request.Request(f"{url}?{query}", headers={"User-Agent": "Mozilla/5.0"})
+                raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    raise ValueError(data.get("msg") or str(data))
+                if not isinstance(data, list):
+                    raise ValueError(f"Binance 返回异常：{str(data)[:120]}")
+                return data
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                wait = 1.2 * attempt
+                print(f"  [binance_spot] 第 {attempt}/{retries} 次获取失败：{type(e).__name__}: {str(e)[:90]}；{wait:.1f}s 后重试")
+                time.sleep(wait)
+        print("  [binance_spot] 当前入口不可用，尝试备用入口 ...")
+    raise ConnectionError(f"Binance 现货 K 线获取失败：{type(last_err).__name__}: {last_err}")
+
+
+def _fetch_binance_spot_klines(
+    pair: str,
+    interval: str,
+    start_ts=None,
+    end_ts=None,
+    retries: int = 3,
+) -> pd.DataFrame:
+    """拉取 Binance 现货 K 线，返回标准 OHLCV。
+
+    pair 使用现货交易对，如 BTCUSDT/ETHUSDT/BNBUSDT；不会访问 futures/um 合约接口。
+    """
+    interval_ms = _binance_interval_ms(interval)
+    cursor = 0 if start_ts is None else _ts_to_ms(start_ts)
+    end_ms = _ts_to_ms(end_ts) if end_ts is not None else None
+    now_ms = int(time.time() * 1000)
+    if end_ms is not None:
+        end_ms = min(end_ms, now_ms)
+
+    rows: list[list] = []
+    limit = 1000
+    while True:
+        params = {
+            "symbol": pair.upper(),
+            "interval": interval,
+            "limit": limit,
+            "startTime": cursor,
+        }
+        if end_ms is not None:
+            params["endTime"] = end_ms
+
+        batch = _request_binance_klines(params, retries=retries)
+        if not batch:
+            break
+
+        # Binance 会返回当前未收盘 K 线；回测只使用已收盘 bar。
+        closed = [r for r in batch if int(r[6]) <= now_ms]
+        rows.extend(closed)
+
+        last_open = int(batch[-1][0])
+        next_cursor = last_open + interval_ms
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if end_ms is not None and cursor > end_ms:
+            break
+        if len(batch) < limit:
+            break
+        time.sleep(0.05)
+
+    if not rows:
+        return _empty_ohlcv()
+
+    out = pd.DataFrame({
+        "date": pd.to_datetime([int(r[0]) for r in rows], unit="ms", utc=True).tz_convert(None),
+        "open": [r[1] for r in rows],
+        "high": [r[2] for r in rows],
+        "low": [r[3] for r in rows],
+        "close": [r[4] for r in rows],
+        "volume": [r[5] for r in rows],
+    })
+    for col in _STD_COLS:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out[["date"] + _STD_COLS].dropna(subset=["close"])
+    out = out.sort_values("date").drop_duplicates(subset="date").set_index("date")
+    return out
+
+
 def _fetch_daily_raw(route: dict) -> pd.DataFrame:
     kind = route["kind"]
     if kind in ("a_index", "us"):
@@ -314,6 +490,8 @@ def _fetch_daily_raw(route: dict) -> pd.DataFrame:
         return _fetch_global_raw(route["fetch_id"])
     if kind == "hk":
         return _fetch_hk_raw(route["fetch_id"])
+    if kind == "crypto":
+        return _fetch_binance_spot_klines(route["fetch_id"], "1d")
     raise ValueError(f"未知日线数据路由：{route}")
 
 
@@ -568,6 +746,88 @@ def fetch_intraday(
     return df
 
 
+def fetch_crypto_bars(
+    symbol: str,
+    timeframe: str = "1d",
+    start: str | None = None,
+    end: str | None = None,
+    warmup: int = 0,
+    refresh: bool = False,
+) -> pd.DataFrame:
+    """获取 BTC/ETH/BNB 的 Binance 现货 K 线（支持 1d/4h/2h/1h/30m），免费且无需 key。"""
+    route = _crypto_route(symbol)
+    if not route:
+        raise ValueError(f"暂不支持的加密货币标的：{symbol}。当前支持 BTC/BTCUSDT、ETH/ETHUSDT、BNB/BNBUSDT。")
+
+    tf_key = _normalize_timeframe_key(timeframe)
+    if tf_key not in TIMEFRAME_TO_BINANCE:
+        raise ValueError(f"加密货币不支持的时间框架 {timeframe}；可选：{list(TIMEFRAME_TO_BINANCE)}")
+
+    pair = route["fetch_id"]
+    interval = TIMEFRAME_TO_BINANCE[tf_key]
+    interval_ms = _binance_interval_ms(interval)
+    cache_suffix = "daily" if tf_key == "1d" else tf_key
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(CACHE_DIR, f"{route['cache_key']}_{cache_suffix}.csv")
+
+    cached = _read_cache(cache_path)
+    today = dt.date.today()
+    start_ts = pd.to_datetime(start) if start else None
+    fetch_floor = None
+    if start_ts is not None:
+        fetch_floor = start_ts - pd.to_timedelta(interval_ms * max(int(warmup), 0), unit="ms")
+    end_ts = pd.to_datetime(end) if end else pd.Timestamp.now(tz="UTC").tz_convert(None)
+
+    need_fetch, reason = False, ""
+    if refresh:
+        need_fetch, reason = True, "强制刷新"
+    elif cached is None:
+        need_fetch, reason = True, "本地无缓存"
+    else:
+        cache_start, cache_end = cached.index.min(), cached.index.max()
+        fetched_today = dt.date.fromtimestamp(os.path.getmtime(cache_path)) == today
+        if fetch_floor is not None and fetch_floor < cache_start:
+            need_fetch, reason = True, f"请求起始 {start_ts.date()} 需要更早预热数据"
+        elif end_ts > cache_end and not fetched_today:
+            need_fetch, reason = True, "更新最新 bar"
+
+    if need_fetch:
+        if cached is not None and not refresh and (fetch_floor is None or fetch_floor >= cached.index.min()):
+            fetch_start = cached.index.max()
+        else:
+            fetch_start = fetch_floor
+        print(f"获取加密货币现货数据：{symbol} -> {pair} {tf_key}（Binance Spot；{reason}）")
+        fresh = _fetch_binance_spot_klines(pair, interval, start_ts=fetch_start, end_ts=end_ts)
+        if cached is not None:
+            df = pd.concat([cached, fresh]) if fresh is not None and not fresh.empty else cached
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+        else:
+            df = fresh
+        if df is None or df.empty:
+            raise ConnectionError(f"{pair} {tf_key} 未获取到可用的已收盘现货 K 线")
+        df.to_csv(cache_path, encoding="utf-8")
+        print(f"  已更新缓存：{len(df)} 根（{df.index.min()} ~ {df.index.max()}）-> {cache_path}")
+    else:
+        df = cached
+        print(f"使用本地缓存：{len(df)} 根，{df.index.min()} ~ {df.index.max()}")
+
+    full_start, full_end = df.index.min(), df.index.max()
+    if end is not None:
+        df = df[df.index <= pd.to_datetime(end)]
+    if start is not None:
+        if warmup > 0:
+            pos = df.index.searchsorted(start_ts)
+            df = df.iloc[max(0, pos - warmup):]
+        else:
+            df = df[df.index >= start_ts]
+
+    if df.empty:
+        raise ValueError(
+            f"裁剪后无数据。请求区间 [{start} ~ {end}]，但 {pair} {tf_key} 可用数据为 "
+            f"[{full_start} ~ {full_end}]。")
+    return df
+
+
 def fetch_bars(
     symbol: str,
     timeframe: str = "1d",
@@ -576,8 +836,10 @@ def fetch_bars(
     warmup: int = 0,
     refresh: bool = False,
 ) -> pd.DataFrame:
-    """统一取数入口：日线走 fetch_index_daily（A股/全球/港股/美股皆可），日内走 fetch_intraday（仅美股）。"""
-    if timeframe in (None, "1d", "日线", "day", "daily"):
+    """统一取数入口：日线走 fetch_index_daily，日内走对应资产的数据源；BTC/ETH/BNB 走 Binance 现货。"""
+    if _is_crypto(symbol):
+        return fetch_crypto_bars(symbol, timeframe, start=start, end=end, warmup=warmup, refresh=refresh)
+    if _normalize_timeframe_key(timeframe) == "1d":
         return fetch_index_daily(symbol, start=start, end=end, warmup=warmup, refresh=refresh)
     return fetch_intraday(symbol, timeframe, start=start, end=end, warmup=warmup, refresh=refresh)
 

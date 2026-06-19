@@ -60,6 +60,7 @@ def compute_metrics(
     """
     n = len(equity)
     total_return = float(equity.iloc[-1] - 1.0)
+    peak_return = float(equity.max() - 1.0)
     ann_return = _annualized(total_return, n, periods_per_year)
 
     rf_daily = rf / periods_per_year
@@ -106,11 +107,13 @@ def compute_metrics(
 
     # 买入持有基准
     bh_total = float(buy_hold.iloc[-1] - 1.0)
+    bh_peak = float(buy_hold.max() - 1.0)
     bh_ann = _annualized(bh_total, n, periods_per_year)
     bh_mdd, _, _ = max_drawdown(buy_hold)
 
     return {
         "total_return": total_return,
+        "peak_return": peak_return,
         "annual_return": ann_return,
         "max_drawdown": mdd,
         "dd_peak": dd_peak,
@@ -128,6 +131,7 @@ def compute_metrics(
         "max_holding_days": max_hold,
         "min_holding_days": min_hold,
         "bh_total_return": bh_total,
+        "bh_peak_return": bh_peak,
         "bh_annual_return": bh_ann,
         "bh_max_drawdown": bh_mdd,
         "n_days": n,

@@ -17,7 +17,7 @@ try:
 except Exception:
     pass
 
-from data import fetch_bars, _is_us, daily_symbol_label
+from data import fetch_bars, _is_us, _is_crypto, daily_symbol_label
 from strategy import MovingAverageStrategy
 from engine import BacktestEngine
 from metrics import compute_metrics
@@ -54,8 +54,14 @@ def index_name(code: str) -> str:
     return extra.get(c, INDEX_NAMES.get(c, code))
 
 
-def _periods_per_year(timeframe: str, idx) -> float:
-    """每年 bar 数，用于年化/夏普折算。日线固定 252；日内按数据时间跨度推算（含夜盘/周末间隔）。"""
+def _periods_per_year(timeframe: str, idx, symbol: str | None = None) -> float:
+    """每年 bar 数，用于年化/夏普折算。
+
+    股票/指数日线固定 252；加密货币与日内数据按实际时间跨度推算。
+    """
+    if symbol and _is_crypto(symbol) and len(idx) >= 2:
+        span_years = max((idx[-1] - idx[0]).total_seconds() / (365.25 * 86400), 1e-9)
+        return len(idx) / span_years
     if timeframe in (None, "1d", "日线"):
         return 252.0
     if len(idx) < 2:
@@ -119,7 +125,7 @@ def run_one(symbol: str, args) -> dict:
     eng = BacktestEngine(commission=args.commission, slippage=args.slippage,
                          exec_mode=args.exec)
     res = eng.run(df, sig, stats_start=args.start, ma=strat.ma)
-    ppy = _periods_per_year(timeframe, res.daily_returns.index)
+    ppy = _periods_per_year(timeframe, res.daily_returns.index, symbol)
     m = compute_metrics(res.equity, res.daily_returns, res.trades, res.buy_hold,
                         rf=args.rf, periods_per_year=ppy)
     name = index_name(symbol)
@@ -161,7 +167,7 @@ def execute(args) -> SimpleNamespace:
         print(f"参数寻优：在 {symbols[0]} 上扫描 买入×卖出 均线网格 "
               f"MA {windows.start}~{windows.stop-1} 步长 {windows.step}"
               f"（{n_periods}×{n_periods}={n_periods*n_periods} 个组合）...")
-        ppy = _periods_per_year(timeframe, panels[0]["res"].daily_returns.index)
+        ppy = _periods_per_year(timeframe, panels[0]["res"].daily_returns.index, symbols[0])
         optimize_df = optimize_ma(panels[0]["df"], windows, stats_start=args.start,
                                   commission=args.commission, slippage=args.slippage,
                                   exec_mode=args.exec, rf=args.rf, periods_per_year=ppy)

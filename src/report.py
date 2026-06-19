@@ -177,6 +177,9 @@ def _optimize_fig(opt: pd.DataFrame) -> go.Figure:
 # ---------- HTML 片段 ----------
 
 def _metric_cards(m: dict) -> str:
+    def pl_ratio(value: float) -> str:
+        return "∞" if value == float("inf") else f"{value:.2f}"
+
     def card(label, value, good=None, sub="", tip=""):
         cls = "" if good is None else (" pos" if good else " neg")
         sub_html = f'<div class="sub">{_esc(sub)}</div>' if sub else ""
@@ -190,14 +193,17 @@ def _metric_cards(m: dict) -> str:
              f'买入持有 {_pct(m["bh_total_return"])}'),
         card("年化收益率", _pct(m["annual_return"]), m["annual_return"] > 0,
              f'买入持有 {_pct(m["bh_annual_return"])}'),
+        card("期间最高收益率", _pct(m["peak_return"]), m["peak_return"] > 0,
+             f'买入持有 {_pct(m["bh_peak_return"])}',
+             tip="回测期间策略净值曾达到的最高收益水平，即 max(净值) - 1；不同于最终总收益率。"),
         card("最大回撤", _pct(m["max_drawdown"]), m["max_drawdown"] >= -0.2,
              f'买入持有 {_pct(m["bh_max_drawdown"])}'),
         card("夏普比率", f'{m["sharpe"]:.2f}', m["sharpe"] > 0,
              sub="每单位风险的超额收益",
              tip="(年化收益率 − 无风险利率) ÷ 收益波动率。衡量每承担一单位“总波动风险”能换来多少超额收益，越高越好；>1 通常算不错。"),
-        card("胜率", _pct(m["win_rate"], 1), m["win_rate"] >= 0.5),
-        card("盈亏比", ("∞" if m["profit_loss_ratio"] == float("inf") else f'{m["profit_loss_ratio"]:.2f}'),
-             m["profit_loss_ratio"] >= 1),
+        card("胜率 / 盈亏比", f'{_pct(m["win_rate"], 1)} / {pl_ratio(m["profit_loss_ratio"])}',
+             m["win_rate"] >= 0.5 and m["profit_loss_ratio"] >= 1,
+             sub="胜率 / 平均盈亏比"),
         card("Sortino", f'{m["sortino"]:.2f}', m["sortino"] > 0,
              sub="每单位下行风险收益",
              tip="索提诺比率。与夏普类似，但分母只统计“下行波动”（亏损方向的波动），不惩罚上涨波动，更贴近投资者对风险的真实感受，越高越好。"),
@@ -277,19 +283,23 @@ def _optimize_table(opt: pd.DataFrame) -> str:
 
 
 def _comparison_table(panels: list[dict]) -> str:
+    def pl_ratio(value: float) -> str:
+        return "∞" if value == float("inf") else f"{value:.2f}"
+
     head = "".join(f"<th>{_esc(p['label'])}</th>" for p in panels)
     metric_rows = [
         ("总收益率", lambda m: _pct(m["total_return"]), "total_return"),
         ("年化收益率", lambda m: _pct(m["annual_return"]), "annual_return"),
+        ("期间最高收益率", lambda m: _pct(m["peak_return"]), "peak_return"),
         ("最大回撤", lambda m: _pct(m["max_drawdown"]), None),
         ("夏普比率", lambda m: f'{m["sharpe"]:.2f}', "sharpe"),
         ("Sortino", lambda m: f'{m["sortino"]:.2f}', "sortino"),
         ("Calmar", lambda m: f'{m["calmar"]:.2f}', "calmar"),
         ("交易数", lambda m: str(m["n_trades"]), None),
-        ("胜率", lambda m: _pct(m["win_rate"], 1), None),
-        ("盈亏比", lambda m: ("∞" if m["profit_loss_ratio"] == float("inf") else f'{m["profit_loss_ratio"]:.2f}'), None),
+        ("胜率 / 盈亏比", lambda m: f'{_pct(m["win_rate"], 1)} / {pl_ratio(m["profit_loss_ratio"])}', None),
         ("平均持仓天数", lambda m: f'{m["avg_holding_days"]:.1f}', None),
         ("买入持有总收益", lambda m: _pct(m["bh_total_return"]), None),
+        ("买入持有最高收益", lambda m: _pct(m["bh_peak_return"]), None),
     ]
     body = ""
     for label, fn, signkey in metric_rows:
@@ -410,8 +420,8 @@ def render_html(panels: list[dict], meta: dict, output_path: str | None = None,
         f'单边佣金 {meta.get("commission",0)*1e4:.1f}‱'
         + (f'，滑点 {meta.get("slippage",0)*1e4:.1f}‱' if meta.get("slippage") else "") + '。<br>'
         '说明：当日收盘价成交模式含轻微未来函数（以当日收盘价决策并成交），属日线回测常规简化；'
-        '如需更贴近实盘可选「次日开盘」成交。指数不可直接交易，本结果仅为策略验证，不构成投资建议。<br>'
-        f'数据源：akshare（新浪财经/东方财富等）。生成区间：{_esc(meta.get("start"))} ~ {_esc(meta.get("end"))}。'
+        '如需更贴近实盘可选「次日开盘」成交。部分指数不可直接交易，本结果仅为策略验证，不构成投资建议。<br>'
+        f'数据源：akshare（新浪财经/东方财富等）/ Binance 现货公开接口。生成区间：{_esc(meta.get("start"))} ~ {_esc(meta.get("end"))}。'
         '</div>'
     )
     footer = '<div class="copyright">Copyright © Rick</div>'
