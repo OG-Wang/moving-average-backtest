@@ -18,15 +18,15 @@ from metrics import drawdown_series, yearly_returns, monthly_returns_table
 
 # ---- 浅色专业版调色 ----
 C_BG = "#ffffff"
-C_PANEL = "#f7f8fa"
-C_INK = "#1f2733"
-C_MUTED = "#6b7480"
-C_GRID = "#e6e9ee"
-C_STRAT = "#1f5fbf"     # 策略线：沉稳蓝
-C_BENCH = "#9aa4b2"     # 基准线：灰
-C_BUY = "#d83a34"       # 买入：红（A股惯例 买红）
-C_SELL = "#2e9e5b"      # 卖出：绿（卖绿）
-C_DD = "#d83a34"        # 回撤填充
+C_PANEL = "#f6f8fb"
+C_INK = "#18212c"
+C_MUTED = "#4f5f70"
+C_GRID = "#d9e0ea"
+C_STRAT = "#174ea6"     # 策略线：沉稳蓝
+C_BENCH = "#7a8796"     # 基准线：灰
+C_BUY = "#c9332b"       # 买入：红（A股惯例 买红）
+C_SELL = "#23804a"      # 卖出：绿（卖绿）
+C_DD = "#c9332b"        # 回撤填充
 
 
 def _esc(value) -> str:
@@ -36,11 +36,14 @@ def _esc(value) -> str:
 _PLOT_LAYOUT = dict(
     paper_bgcolor=C_BG,
     plot_bgcolor=C_BG,
-    font=dict(color=C_INK, family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif", size=13),
-    margin=dict(l=55, r=25, t=40, b=40),
-    xaxis=dict(gridcolor=C_GRID, zeroline=False),
-    yaxis=dict(gridcolor=C_GRID, zeroline=False),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    font=dict(color=C_INK, family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif", size=14),
+    margin=dict(l=62, r=30, t=46, b=46),
+    xaxis=dict(gridcolor=C_GRID, zeroline=False, tickfont=dict(size=12, color=C_MUTED),
+               title_font=dict(size=13, color=C_MUTED)),
+    yaxis=dict(gridcolor=C_GRID, zeroline=False, tickfont=dict(size=12, color=C_MUTED),
+               title_font=dict(size=13, color=C_MUTED)),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                font=dict(size=13, color=C_MUTED)),
     hovermode="x unified",
 )
 
@@ -81,11 +84,11 @@ def _equity_fig(panel: dict, show_markers: bool = True) -> go.Figure:
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=f"{label} 策略",
-                             line=dict(color=C_STRAT, width=2),
+                             line=dict(color=C_STRAT, width=2.6),
                              customdata=extra.values,
                              hovertemplate="策略净值 %{y:.3f}%{customdata}<extra></extra>"))
     fig.add_trace(go.Scatter(x=bh.index, y=bh.values, name="买入持有",
-                             line=dict(color=C_BENCH, width=1.5, dash="dash"),
+                             line=dict(color=C_BENCH, width=1.9, dash="dash"),
                              hovertemplate="买入持有 %{y:.3f}<extra></extra>"))
     if show_markers and len(res.trades):
         t = res.trades
@@ -96,14 +99,14 @@ def _equity_fig(panel: dict, show_markers: bool = True) -> go.Figure:
         buy_y = eq.reindex(buy_x).values
         # 买卖三角仅作可视标注，不并入统一悬停框（成交价已通过策略线的 customdata 在交易日显示）
         fig.add_trace(go.Scatter(x=buy_x, y=buy_y, mode="markers", name="买入", hoverinfo="skip",
-                                 marker=dict(symbol="triangle-up", size=10, color=C_BUY,
-                                             line=dict(width=0.5, color="#fff"))))
+                                 marker=dict(symbol="triangle-up", size=11, color=C_BUY,
+                                             line=dict(width=0.8, color="#fff"))))
         if len(closed):
             sell_x = pd.to_datetime(closed["exit_date"])
             sell_y = eq.reindex(sell_x).values
             fig.add_trace(go.Scatter(x=sell_x, y=sell_y, mode="markers", name="卖出", hoverinfo="skip",
-                                     marker=dict(symbol="triangle-down", size=10, color=C_SELL,
-                                                 line=dict(width=0.5, color="#fff"))))
+                                     marker=dict(symbol="triangle-down", size=11, color=C_SELL,
+                                                 line=dict(width=0.8, color="#fff"))))
     fig.update_layout(**_PLOT_LAYOUT, height=420)
     fig.update_yaxes(title_text="净值（起点=1.0）")
     fig.update_xaxes(hoverformat="%Y-%m-%d")  # 悬停日期精确到日
@@ -117,7 +120,7 @@ def _multi_equity_fig(panels: list[dict]) -> go.Figure:
         eq = p["res"].equity
         label = _esc(p["label"])
         fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name=label,
-                                 line=dict(color=palette[i % len(palette)], width=2),
+                                 line=dict(color=palette[i % len(palette)], width=2.5),
                                  hovertemplate="净值 %{y:.3f}<extra></extra>"))
     fig.update_layout(**_PLOT_LAYOUT, height=460)
     fig.update_yaxes(title_text="净值（起点=1.0）")
@@ -129,8 +132,8 @@ def _drawdown_fig(panel: dict) -> go.Figure:
     dd = drawdown_series(panel["res"].equity) * 100
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=dd.index, y=dd.values, name="回撤", fill="tozeroy",
-                             line=dict(color=C_DD, width=1),
-                             fillcolor="rgba(216,58,52,0.15)",
+                             line=dict(color=C_DD, width=1.4),
+                             fillcolor="rgba(201,51,43,0.16)",
                              hovertemplate="回撤 %{y:.2f}%<extra></extra>"))
     fig.update_layout(**_PLOT_LAYOUT, height=260)
     fig.update_yaxes(title_text="回撤 (%)", ticksuffix="")
@@ -146,8 +149,8 @@ def _monthly_heatmap_fig(panel: dict) -> go.Figure:
     text = [[("" if pd.isna(v) else f"{v:.1f}") for v in row] for row in z]
     fig = go.Figure(go.Heatmap(
         z=z, x=months, y=years, text=text, texttemplate="%{text}",
-        textfont=dict(size=11),
-        colorscale=[[0, "#2e9e5b"], [0.5, "#ffffff"], [1, "#d83a34"]],
+        textfont=dict(size=12, color=C_INK),
+        colorscale=[[0, C_SELL], [0.5, "#ffffff"], [1, C_BUY]],
         zmid=0, colorbar=dict(title="%", ticksuffix="%"),
         hovertemplate="%{y}年%{x}: %{z:.2f}%<extra></extra>",
     ))
@@ -165,7 +168,7 @@ def _optimize_fig(opt: pd.DataFrame) -> go.Figure:
     fig.add_trace(go.Bar(x=labels, y=o["sharpe"], name="夏普比率",
                          marker_color=C_STRAT, yaxis="y1"))
     fig.add_trace(go.Scatter(x=labels, y=o["total_return"] * 100, name="总收益(%)",
-                             mode="lines+markers", line=dict(color=C_BUY, width=2), yaxis="y2"))
+                             mode="lines+markers", line=dict(color=C_BUY, width=2.4), yaxis="y2"))
     layout = {k: v for k, v in _PLOT_LAYOUT.items() if k not in ("yaxis",)}
     fig.update_layout(**layout, height=380,
                       yaxis=dict(title="夏普比率", gridcolor=C_GRID),
@@ -179,6 +182,13 @@ def _optimize_fig(opt: pd.DataFrame) -> go.Figure:
 def _metric_cards(m: dict) -> str:
     def pl_ratio(value: float) -> str:
         return "∞" if value == float("inf") else f"{value:.2f}"
+
+    def trade_expectancy() -> float:
+        win_rate = float(m["win_rate"])
+        ratio = float(m["profit_loss_ratio"])
+        if ratio == float("inf"):
+            return float("inf") if win_rate > 0 else -(1 - win_rate)
+        return win_rate * ratio - (1 - win_rate)
 
     def card(label, value, good=None, sub="", tip=""):
         cls = "" if good is None else (" pos" if good else " neg")
@@ -202,8 +212,9 @@ def _metric_cards(m: dict) -> str:
              sub="每单位风险的超额收益",
              tip="(年化收益率 − 无风险利率) ÷ 收益波动率。衡量每承担一单位“总波动风险”能换来多少超额收益，越高越好；>1 通常算不错。"),
         card("胜率 / 盈亏比", f'{_pct(m["win_rate"], 1)} / {pl_ratio(m["profit_loss_ratio"])}',
-             m["win_rate"] >= 0.5 and m["profit_loss_ratio"] >= 1,
-             sub="胜率 / 平均盈亏比"),
+             trade_expectancy() > 0,
+             sub="胜率 / 平均盈亏比",
+             tip="按交易期望染色：胜率 × 盈亏比 − (1 − 胜率)。大于 0 标红，否则标绿。"),
         card("Sortino", f'{m["sortino"]:.2f}', m["sortino"] > 0,
              sub="每单位下行风险收益",
              tip="索提诺比率。与夏普类似，但分母只统计“下行波动”（亏损方向的波动），不惩罚上涨波动，更贴近投资者对风险的真实感受，越高越好。"),
@@ -311,49 +322,63 @@ def _comparison_table(panels: list[dict]) -> str:
                 cls = "pos" if p["metrics"][signkey] > 0 else "neg"
             cells += f'<td class="{cls}">{_esc(v)}</td>'
         body += f"<tr><td>{_esc(label)}</td>{cells}</tr>"
-    return (f'<div class="tbl-wrap"><table class="trades cmp"><thead><tr><th>指标</th>{head}</tr></thead>'
+    return (f'<div class="tbl-wrap no-inner-scroll"><table class="trades cmp"><thead><tr><th>指标</th>{head}</tr></thead>'
             f'<tbody>{body}</tbody></table></div>')
 
 
 _CSS = """
-* { box-sizing: border-box; }
-body { margin:0; background:#eef0f3; color:#1f2733;
-  font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif; }
-.wrap { max-width:1080px; margin:0 auto; padding:28px 22px 60px; }
-header.top { border-bottom:2px solid #1f5fbf; padding-bottom:14px; margin-bottom:8px; }
-header.top h1 { margin:0 0 4px; font-size:23px; font-weight:700; }
-header.top .meta { color:#6b7480; font-size:13.5px; }
-section { background:#fff; border:1px solid #e6e9ee; border-radius:10px;
-  padding:18px 20px; margin-top:18px; box-shadow:0 1px 2px rgba(20,30,50,.04); }
-section h2 { margin:0 0 12px; font-size:16px; font-weight:650;
-  display:flex; align-items:center; gap:8px; }
-section h2::before { content:""; width:4px; height:15px; background:#1f5fbf; border-radius:2px; }
-.cards { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; justify-items:center; }
-.card { background:#f7f8fa; border:1px solid #e6e9ee; border-radius:8px; padding:12px 14px;
-  width:100%; text-align:center; }
+* { box-sizing: border-box; letter-spacing:0; }
+body { margin:0; background:#f1f4f8; color:#18212c; font-size:15px; line-height:1.5;
+  font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; }
+.wrap { max-width:1220px; margin:0 auto; padding:28px 24px 64px; }
+header.top { background:#fff; border:1px solid #cfd7e2; border-top:4px solid #174ea6;
+  border-radius:8px; padding:18px 22px; margin-bottom:18px; }
+header.top h1 { margin:0 0 6px; font-size:25px; line-height:1.25; font-weight:750; }
+header.top .meta { color:#4f5f70; font-size:14px; line-height:1.55; }
+section { background:#fff; border:1px solid #cfd7e2; border-radius:8px;
+  padding:22px; margin-top:18px; box-shadow:0 1px 2px rgba(19,33,54,.04); }
+section h2 { margin:0 0 16px; font-size:17px; line-height:1.3; font-weight:700;
+  display:flex; align-items:center; gap:9px; }
+section h2::before { content:""; flex:0 0 auto; width:4px; height:16px; background:#174ea6; border-radius:2px; }
+.cards { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; justify-items:stretch; }
+.card { background:#f6f8fb; border:1px solid #d5dde8; border-radius:8px; padding:14px 16px;
+  width:100%; min-height:98px; text-align:center; display:flex; flex-direction:column; justify-content:center; }
 .card[title] { cursor:help; }
-.card .lbl { font-size:12.5px; color:#6b7480; }
-.card .lbl .info { font-size:10px; color:#aeb6c2; margin-left:3px; vertical-align:1px; }
-.card .val { font-size:21px; font-weight:700; margin-top:3px; }
-.card .sub { font-size:11.5px; color:#94a0ad; margin-top:3px; }
-.card.pos .val { color:#d83a34; }
-.card.neg .val { color:#2e9e5b; }
-table { border-collapse:collapse; width:100%; font-size:13px; }
-table th, table td { padding:7px 10px; text-align:right; border-bottom:1px solid #eef0f3; }
+.card .lbl { font-size:13px; line-height:1.35; color:#4f5f70; font-weight:650; }
+.card .lbl .info { font-size:11px; color:#748394; margin-left:3px; vertical-align:1px; }
+.card .val { font-size:24px; line-height:1.2; font-weight:800; margin-top:5px; font-variant-numeric:tabular-nums; }
+.card .sub { font-size:12.5px; line-height:1.35; color:#6f7d8c; margin-top:5px; }
+.card.pos .val { color:#c9332b; }
+.card.neg .val { color:#23804a; }
+table { border-collapse:collapse; width:100%; font-size:14px; font-variant-numeric:tabular-nums; }
+table th, table td { padding:9px 12px; text-align:right; border-bottom:1px solid #e1e6ee; vertical-align:middle; }
 table th:first-child, table td:first-child { text-align:left; }
-table thead th { background:#f3f5f8; color:#54606e; font-weight:600; position:sticky; top:0; }
+table thead th { background:#eef2f7; color:#303b48; font-weight:700; position:sticky; top:0; z-index:1; }
+table tbody tr:hover { background:#f7f9fc; }
 table.yearly td, table.yearly th { text-align:center; }
-.tbl-wrap { max-height:420px; overflow:auto; border:1px solid #eef0f3; border-radius:8px; }
+.tbl-wrap { max-height:460px; overflow:auto; border:1px solid #d5dde8; border-radius:8px; }
+.tbl-wrap.no-inner-scroll { max-height:none; overflow:visible; }
 table.cmp td, table.cmp th { text-align:center; }
-table.cmp td:first-child, table.cmp th:first-child { text-align:left; font-weight:600; }
-td.pos, .pos { color:#d83a34; }
-td.neg, .neg { color:#2e9e5b; }
-.muted { color:#94a0ad; }
+table.cmp td:first-child, table.cmp th:first-child { text-align:left; font-weight:700; }
+td.pos, .trades .pos { color:#c9332b; font-weight:650; }
+td.neg, .trades .neg { color:#23804a; font-weight:650; }
+.muted { color:#5f6d7c; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
-.note { font-size:12px; color:#94a0ad; margin-top:26px; line-height:1.7;
-  border-top:1px solid #e6e9ee; padding-top:14px; }
-.copyright { text-align:center; color:#aeb6c2; font-size:12px; margin-top:18px; letter-spacing:.3px; }
-@media (max-width:760px){ .cards{grid-template-columns:repeat(2,1fr)} .grid2{grid-template-columns:1fr} }
+.note { font-size:13px; color:#5f6d7c; margin-top:26px; line-height:1.75;
+  border-top:1px solid #cfd7e2; padding-top:16px; }
+.copyright { text-align:center; color:#748394; font-size:12.5px; margin-top:18px; }
+@media (max-width:980px){ .cards{grid-template-columns:repeat(3,minmax(0,1fr))} .grid2{grid-template-columns:1fr} }
+@media (max-width:680px){
+  .wrap{padding:18px 12px 44px}
+  header.top,section{padding:16px}
+  header.top h1{font-size:21px}
+  .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .card .val{font-size:22px}
+  table{font-size:13.5px}
+  table th,table td{padding:8px 9px}
+}
+@media (max-width:460px){ .cards{grid-template-columns:1fr} }
 """
 
 

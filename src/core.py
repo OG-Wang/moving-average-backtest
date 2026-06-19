@@ -109,14 +109,19 @@ def _ma_label(buy: int, sell: int, require_order: bool = False,
     return base
 
 
-def run_one(symbol: str, args) -> dict:
+def _warmup_for_window(window: int) -> int:
+    """按最长均线周期计算预热长度，确保回测起点附近均线已充分成形。"""
+    return max(2 * int(window), int(window) + 5)
+
+
+def run_one(symbol: str, args, min_warmup: int = 0) -> dict:
     """对单个标的跑回测，返回供报告使用的 panel。"""
     timeframe = getattr(args, "timeframe", "1d") or "1d"
     buy, sell = _ma_pair(args)
     require_order = bool(getattr(args, "require_ma_order", False))
     sell_buffer = _sell_buffer(args)
     longest = max(buy, sell)
-    warmup = max(2 * longest, longest + 5)
+    warmup = max(_warmup_for_window(longest), int(min_warmup or 0))
     df = fetch_bars(symbol, timeframe, start=args.start, end=args.end,
                     warmup=warmup, refresh=args.refresh)
     strat = MovingAverageStrategy(buy, sell, require_ma_order=require_order,
@@ -155,14 +160,19 @@ def execute(args) -> SimpleNamespace:
     require_order = bool(getattr(args, "require_ma_order", False))
     sell_buffer = _sell_buffer(args)
     ma_desc = _ma_label(buy, sell, require_order, sell_buffer)
+    optimize_windows = parse_spec(args.optimize) if args.optimize else None
+    optimize_warmup = _warmup_for_window(optimize_windows[-1]) if optimize_windows else 0
     print(f"开始回测：{', '.join(symbols)} | {tf_label} | {ma_desc} | {args.start} ~ {args.end or '最新'} | "
           f"成交={args.exec} | 佣金={args.commission*1e4:.1f}‱")
 
-    panels = [run_one(s, args) for s in symbols]
+    panels = [
+        run_one(s, args, min_warmup=optimize_warmup if i == 0 else 0)
+        for i, s in enumerate(symbols)
+    ]
 
     optimize_df = None
-    if args.optimize:
-        windows = parse_spec(args.optimize)
+    if optimize_windows:
+        windows = optimize_windows
         n_periods = len(windows)
         print(f"参数寻优：在 {symbols[0]} 上扫描 买入×卖出 均线网格 "
               f"MA {windows.start}~{windows.stop-1} 步长 {windows.step}"

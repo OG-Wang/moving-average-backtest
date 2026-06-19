@@ -59,47 +59,66 @@ PAGE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>指数均线择时回测</title>
 <style>
-:root{ --ink:#1f2733; --muted:#6b7480; --line:#e6e9ee; --accent:#1f5fbf; --panel:#f7f8fa; }
-*{box-sizing:border-box}
-body{margin:0;background:#eef0f3;color:var(--ink);
- font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;}
-.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px;}
-header.top{border-bottom:2px solid var(--accent);padding-bottom:12px;margin-bottom:18px;}
-header.top h1{margin:0 0 3px;font-size:22px;}
-header.top .meta{color:var(--muted);font-size:13px;}
-.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px 20px;
- box-shadow:0 1px 2px rgba(20,30,50,.04);margin-bottom:18px;}
-.card h2{margin:0 0 14px;font-size:15px;display:flex;align-items:center;gap:8px;}
-.card h2::before{content:"";width:4px;height:14px;background:var(--accent);border-radius:2px;}
-.presets{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
-.presets button{border:1px solid var(--line);background:var(--panel);color:var(--ink);
- padding:6px 12px;border-radius:16px;font-size:13px;cursor:pointer;}
-.presets button:hover{border-color:var(--accent);color:var(--accent);}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px;}
-.field{display:flex;flex-direction:column;gap:5px;}
+:root{
+ --ink:#18212c; --muted:#4f5f70; --soft:#6f7d8c; --line:#cfd7e2;
+ --line-soft:#e1e6ee; --accent:#174ea6; --accent-ink:#0f3474;
+ --panel:#f6f8fb; --danger:#c9332b; --surface:#ffffff;
+}
+*{box-sizing:border-box;letter-spacing:0}
+body{margin:0;background:#f1f4f8;color:var(--ink);font-size:15px;line-height:1.5;
+ font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;
+ -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+.wrap{max-width:1240px;margin:0 auto;padding:28px 24px 64px;}
+header.top{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--accent);
+ border-radius:8px;padding:18px 22px;margin-bottom:18px;}
+header.top h1{margin:0 0 6px;font-size:25px;line-height:1.25;font-weight:750;}
+header.top .meta{color:var(--muted);font-size:14px;line-height:1.55;}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:22px;
+ box-shadow:0 1px 2px rgba(19,33,54,.04);margin-bottom:18px;}
+.card h2{margin:0 0 16px;font-size:17px;line-height:1.3;font-weight:700;display:flex;align-items:center;gap:9px;}
+.card h2::before{content:"";width:4px;height:16px;background:var(--accent);border-radius:2px;}
+.presets{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px;}
+.presets button{min-height:34px;border:1px solid var(--line);background:#fff;color:var(--ink);
+ padding:6px 12px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;}
+.presets button:hover{border-color:var(--accent);color:var(--accent-ink);background:#f3f7ff;}
+.presets button:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible{
+ outline:2px solid rgba(23,78,166,.22);outline-offset:2px;
+}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 18px;}
+.field{display:flex;flex-direction:column;gap:6px;min-width:0;}
 .field.col2{grid-column:span 2;}
-.field label{font-size:12.5px;color:var(--muted);}
-.field .hint{font-size:11px;color:#a3acb8;}
-input,select{padding:8px 10px;border:1px solid var(--line);border-radius:7px;font-size:13.5px;
- color:var(--ink);background:#fff;width:100%;}
-input:focus,select:focus{outline:none;border-color:var(--accent);}
-.row-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);}
-.row-check input{width:auto;}
-.actions{display:flex;align-items:center;gap:14px;margin-top:18px;}
-.btn{background:var(--accent);color:#fff;border:0;padding:10px 26px;border-radius:8px;
- font-size:14px;font-weight:600;cursor:pointer;}
+.field label{font-size:13.5px;color:var(--muted);font-weight:650;line-height:1.35;}
+.field .hint{font-size:12.5px;color:var(--soft);line-height:1.45;}
+input,select{min-height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;font-size:15px;
+ color:var(--ink);background:#fff;width:100%;font-variant-numeric:tabular-nums;}
+input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(23,78,166,.10);}
+.row-check{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--muted);font-weight:650;}
+.row-check input{width:16px;height:16px;min-height:16px;accent-color:var(--accent);}
+.actions{display:flex;align-items:center;gap:14px;margin-top:22px;}
+.btn{background:var(--accent);color:#fff;border:0;padding:11px 28px;border-radius:8px;
+ font-size:15px;font-weight:750;cursor:pointer;min-height:44px;}
+.btn:hover{background:#123f87;}
 .btn:disabled{opacity:.55;cursor:not-allowed;}
-.status{font-size:13px;color:var(--muted);}
-.status.err{color:#d83a34;}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid #cdd6e2;
- border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px;}
+.status{font-size:14px;color:var(--muted);}
+.status.err{color:var(--danger);font-weight:650;}
+.spinner{display:inline-block;width:15px;height:15px;border:2px solid #c3cedb;
+ border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:7px;}
 @keyframes spin{to{transform:rotate(360deg)}}
 #result{display:none;}
-#result .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-#result a{color:var(--accent);text-decoration:none;font-size:13px;}
+#result .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:14px;}
+#result a{color:var(--accent-ink);text-decoration:none;font-size:14px;font-weight:650;}
+#result a:hover{text-decoration:underline;}
 /* 报告内嵌框：高度由 JS 按内容自适应，去边框/底色，使其与页面平铺为一体、不产生内部滚动条 */
 iframe{width:100%;height:600px;border:0;background:transparent;display:block;}
-@media(max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}.field.col2{grid-column:span 2}}
+@media(max-width:920px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.field.col2{grid-column:span 2}}
+@media(max-width:560px){
+ .wrap{padding:18px 12px 44px}
+ header.top,.card{padding:16px}
+ header.top h1{font-size:21px}
+ .grid{grid-template-columns:1fr}.field.col2{grid-column:span 1}
+ .actions{align-items:flex-start;flex-direction:column}
+ .btn{width:100%}
+}
 </style></head>
 <body><div class="wrap">
 <header class="top">
