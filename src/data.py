@@ -117,10 +117,28 @@ def _is_crypto(code: str) -> bool:
     return _crypto_route(code) is not None
 
 
+def _is_csindex(code: str) -> bool:
+    """判断标的是否为中证指数公司发布、需走官方 csindex 源的指数。
+
+    新浪/腾讯只覆盖 000xxx（上证系列）与 399xxx（深证系列）；中证行业/主题指数
+    （93xxxx 数字代码，及 H 开头的全指系列如 H30199）这两个源均查不到，必须走
+    ak.stock_zh_index_hist_csindex（中证指数官网）。判别规则（去空格后）：
+      - 6 位数字且以 93 开头（如 930606/931008/932088）；
+      - 以大写 H 开头后接数字（如 H30199）。
+    """
+    code = str(code).strip()
+    if not code:
+        return False
+    if code[:1] in ("H", "h") and code[1:].isdigit():
+        return True
+    return len(code) == 6 and code.isdigit() and code.startswith("93")
+
+
 def _is_us(code: str) -> bool:
     """判断标的是否为美股个股/ETF。
 
     规则：去空格后，以 sh/sz 前缀开头、或全为数字 → A 股指数；否则（含字母，如 SOXL/AAPL）→ 美股。
+    中证 csindex 指数（93xxxx / H 开头）优先识别，不归入美股。
     """
     code = str(code).strip()
     if not code:
@@ -128,6 +146,8 @@ def _is_us(code: str) -> bool:
     if _is_crypto(code):
         return False
     if _special_daily_route(code):
+        return False
+    if _is_csindex(code):
         return False
     low = code.lower()
     if low.startswith(("sh", "sz", "bj")):
@@ -150,6 +170,9 @@ def to_sina_symbol(code: str) -> str:
     route = _special_daily_route(code)
     if route:
         return route["fetch_id"]
+    if _is_csindex(code):
+        # 中证官方源直接吃原始代码：H 系列统一大写，数字代码原样
+        return code.upper() if code[:1] in ("H", "h") else code
     if _is_us(code):
         return code.upper()
     code = code.lower()
@@ -202,6 +225,10 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     out["high"] = pd.to_numeric(df[high_col], errors="coerce") if high_col else out["close"]
     out["low"] = pd.to_numeric(df[low_col], errors="coerce") if low_col else out["close"]
     out["volume"] = pd.to_numeric(df[volume_col], errors="coerce") if volume_col else pd.NA
+    # 逐行兜底：部分指数源（如中证 csindex 早年）只有收盘、无开/高/低，
+    # 用当日收盘填充缺失的 OHL，使"次日开盘成交"在缺数日退化为按收盘成交（不引入未来信息）。
+    for _c in ("open", "high", "low"):
+        out[_c] = out[_c].fillna(out["close"])
     out = out[["date"] + _STD_COLS].dropna(subset=["close"])
     out = out.sort_values("date").drop_duplicates(subset="date").set_index("date")
     return out
@@ -215,6 +242,9 @@ def _daily_route(symbol: str) -> dict:
     if route:
         return route
     sina_symbol = to_sina_symbol(symbol)
+    if _is_csindex(symbol):
+        # 中证官方源；缓存键用原始代码（如 930606 / H30199），不与 sh/sz 代码空间冲突
+        return {"kind": "csindex", "fetch_id": sina_symbol, "cache_key": sina_symbol, "label": sina_symbol}
     if _is_us(symbol):
         return {"kind": "us", "fetch_id": sina_symbol, "cache_key": f"us_{sina_symbol}", "label": sina_symbol}
     return {"kind": "a_index", "fetch_id": sina_symbol, "cache_key": sina_symbol, "label": sina_symbol}
@@ -295,6 +325,33 @@ def _fetch_raw(sina_symbol: str, retries: int = 3) -> pd.DataFrame:
                 time.sleep(wait)
         print(f"  [{name}] 源不可用，尝试下一个源 ...")
     raise ConnectionError(f"所有数据源均获取失败：{type(last_err).__name__}: {last_err}")
+
+
+def _fetch_csindex_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
+    """获取中证指数公司发布的指数日线（93xxxx / H 系列）。
+
+    走 ak.stock_zh_index_hist_csindex（中证指数官网），该接口【需要起止日期】，
+    与其余日线源"单次返回全历史"不同：这里以很早的起点 + 今天为止请求全量，
+    返回的中文列由 _normalize_ohlcv 统一为标准 OHLCV。
+    """
+    import akshare as ak
+
+    start_date = "19901219"
+    end_date = dt.date.today().strftime("%Y%m%d")
+    last_err: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            df = ak.stock_zh_index_hist_csindex(symbol=fetch_id, start_date=start_date, end_date=end_date)
+            if df is None or len(df) == 0:
+                raise ValueError("返回空数据")
+            normalized = _normalize_ohlcv(df)
+            return _guard_fresh(normalized, "csindex")  # 新鲜度校验
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            wait = 1.5 * attempt
+            print(f"  [csindex] 第 {attempt}/{retries} 次获取失败：{type(e).__name__}: {str(e)[:80]}；{wait:.1f}s 后重试")
+            time.sleep(wait)
+    raise ConnectionError(f"中证指数源获取失败：{type(last_err).__name__}: {last_err}")
 
 
 def _fetch_global_raw(fetch_id: str, retries: int = 3) -> pd.DataFrame:
@@ -486,6 +543,8 @@ def _fetch_daily_raw(route: dict) -> pd.DataFrame:
     kind = route["kind"]
     if kind in ("a_index", "us"):
         return _fetch_raw(route["fetch_id"])
+    if kind == "csindex":
+        return _fetch_csindex_raw(route["fetch_id"])
     if kind == "global":
         return _fetch_global_raw(route["fetch_id"])
     if kind == "hk":
